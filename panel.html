@@ -97,7 +97,12 @@
             <aside class="snapshot-sidebar">
               <div class="snapshot-toolbar">
                 <strong>资源快照</strong>
-                <button id="takeResourceSnapshotBtn" type="button">快照</button>
+                <div class="snapshot-actions">
+                  <button id="takeResourceSnapshotBtn" class="icon-button record-button" type="button" title="创建当前资源快照" aria-label="创建当前资源快照">
+                    <span class="record-dot"></span>
+                  </button>
+                  <button id="compareResourceSnapshotsBtn" class="icon-button" type="button" title="比较选中的两个快照" aria-label="比较选中的两个快照" disabled>⇄</button>
+                </div>
               </div>
               <div id="resourceSnapshotList" class="snapshot-list">
                 <div class="empty">暂无快照</div>
@@ -110,6 +115,15 @@
                   <thead>
                     <tr>
                       <th>预览</th>
+                      <th class="change-col">
+                        <span class="sortable-head">
+                          变化
+                          <span>
+                            <button class="sort-btn" data-sort-key="changeType" data-sort-dir="asc" type="button" title="变化分类升序">▲</button>
+                            <button class="sort-btn" data-sort-key="changeType" data-sort-dir="desc" type="button" title="变化分类降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
                       <th>对象</th>
                       <th>来源</th>
                       <th>

@@ -9,6 +9,8 @@
   var resourceSort = { key: "bytes", dir: "desc" };
   var resourceSnapshots = [];
   var selectedResourceSnapshotId = null;
+  var compareSnapshotIds = [];
+  var resourceCompareResult = null;
 
   var tabs = Array.from(document.querySelectorAll(".tab"));
   var panels = {
@@ -93,7 +95,7 @@
       });
       if (monitorHistory.length > 120) monitorHistory.shift();
     }
-    render();
+    render({ skipResourcePanel: true });
   }
 
   function setStatus(text, isError) {
@@ -113,7 +115,8 @@
     render();
   }
 
-  function render() {
+  function render(options) {
+    options = options || {};
     if (!snapshot) return;
     $("runtimeLabel").textContent = snapshot.runtimeLabel || "未知运行时";
     $("metricFps").textContent = formatNumber(snapshot.monitor.fps, 0);
@@ -126,7 +129,7 @@
 
     if (activeTab === "nodes") renderNodes();
     if (activeTab === "config") renderKeyValues("configGrid", snapshot.config);
-    if (activeTab === "resources") renderResources();
+    if (activeTab === "resources" && !options.skipResourcePanel) renderResources();
     if (activeTab === "gpu") renderGpu();
     if (activeTab === "state") renderKeyValues("stateGrid", snapshot.state);
     if (activeTab === "frame") renderFrame();
@@ -192,36 +195,57 @@
 
   function renderResources() {
     renderResourceSnapshotList();
+    panels.resources.classList.toggle("compare-mode", !!resourceCompareResult);
+    if (resourceCompareResult) {
+      $("resourceSnapshotTitle").textContent = resourceCompareResult.title;
+      var compareRows = sortResources((resourceCompareResult.rows || []).filter(matchesQuery));
+      $("resourceRows").innerHTML = compareRows.map(renderResourceRow).join("") || '<tr><td colspan="8" class="empty">没有匹配的差异资源</td></tr>';
+      updateSortButtons();
+      return;
+    }
+
     var selectedSnapshot = getSelectedResourceSnapshot();
+    if (resourceSort.key === "changeType") {
+      resourceSort = { key: "bytes", dir: "desc" };
+    }
     $("resourceSnapshotTitle").textContent = selectedSnapshot
       ? selectedSnapshot.title + " · " + selectedSnapshot.count + " 个资源 · GPU " + formatBytes(selectedSnapshot.gpuMemory)
       : "点击“快照”保存当前资源状态";
     if (!selectedSnapshot) {
-      $("resourceRows").innerHTML = '<tr><td colspan="7" class="empty">暂无快照。点击左侧“快照”后，再选择快照查看资源列表。</td></tr>';
+      $("resourceRows").innerHTML = '<tr><td colspan="7" class="empty">暂无快照。点击左侧录制按钮后，再选择快照查看资源列表。</td></tr>';
       updateSortButtons();
       return;
     }
 
     var rows = sortResources((selectedSnapshot.resources || []).filter(matchesQuery));
-    $("resourceRows").innerHTML = rows.map(function (item) {
-      var previewMeta = item.size + " · " + item.type + " · GPU " + formatBytes(item.bytes);
-      var preview = item.previewUrl
-        ? '<button class="resource-thumb has-preview" data-preview-kind="image" data-preview-url="' + escapeHtml(item.previewUrl) + '" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(previewMeta) + '" type="button"><img src="' + escapeHtml(item.previewUrl) + '" alt=""></button>'
-        : '<button class="resource-thumb empty-thumb has-preview" data-preview-kind="none" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(previewMeta) + '" type="button"></button>';
-      var refCell = item.refCount === 0
-        ? '<td class="idle-ref"><span class="idle-dot"></span>空闲</td>'
-        : '<td>' + escapeHtml(item.refText == null ? "-" : item.refText) + '</td>';
-      return '<tr>' +
-        '<td class="preview-cell">' + preview + '</td>' +
-        '<td title="' + escapeHtml(item.url) + '">' + escapeHtml(item.name) + '</td>' +
-        '<td>' + escapeHtml(item.source) + '</td>' +
-        '<td>' + formatBytes(item.bytes) + '</td>' +
-        '<td>' + escapeHtml(item.type) + '</td>' +
-        '<td>' + escapeHtml(item.size) + '</td>' +
-        refCell +
-      '</tr>';
-    }).join("") || '<tr><td colspan="7" class="empty">暂无资源数据</td></tr>';
+    $("resourceRows").innerHTML = rows.map(renderResourceRow).join("") || '<tr><td colspan="7" class="empty">暂无资源数据</td></tr>';
     updateSortButtons();
+  }
+
+  function renderResourceRow(item) {
+    var previewMeta = item.size + " · " + item.type + " · GPU " + formatBytes(item.bytes);
+    if (item.diffDetail) previewMeta += " · " + item.diffDetail;
+    var preview = item.previewUrl
+      ? '<button class="resource-thumb has-preview" data-preview-kind="image" data-preview-url="' + escapeHtml(item.previewUrl) + '" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(previewMeta) + '" type="button"><img src="' + escapeHtml(item.previewUrl) + '" alt=""></button>'
+      : '<button class="resource-thumb empty-thumb has-preview" data-preview-kind="none" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(previewMeta) + '" type="button"></button>';
+    var refCell = item.refCount === 0
+      ? '<td class="idle-ref"><span class="idle-dot"></span>空闲</td>'
+      : '<td>' + escapeHtml(item.refText == null ? "-" : item.refText) + '</td>';
+    return '<tr>' +
+      '<td class="preview-cell">' + preview + '</td>' +
+      '<td class="change-cell">' + renderChangeBadge(item.changeType, item.changeText) + '</td>' +
+      '<td title="' + escapeHtml(item.url) + '">' + escapeHtml(item.name) + '</td>' +
+      '<td>' + escapeHtml(item.source) + '</td>' +
+      '<td>' + formatBytes(item.bytes) + '</td>' +
+      '<td>' + escapeHtml(item.type) + '</td>' +
+      '<td>' + escapeHtml(item.size) + '</td>' +
+      refCell +
+    '</tr>';
+  }
+
+  function renderChangeBadge(type, text) {
+    if (!type) return '<span class="change-badge neutral">-</span>';
+    return '<span class="change-badge ' + escapeHtml(type) + '">' + escapeHtml(text || "-") + '</span>';
   }
 
   function createResourceSnapshot() {
@@ -247,6 +271,7 @@
     resourceSnapshots.unshift(next);
     if (resourceSnapshots.length > 30) resourceSnapshots.pop();
     selectedResourceSnapshotId = id;
+    resourceCompareResult = null;
     renderResources();
     setStatus("已创建资源快照: " + next.count + " 个资源", false);
   }
@@ -261,16 +286,149 @@
     var target = $("resourceSnapshotList");
     if (!resourceSnapshots.length) {
       target.innerHTML = '<div class="empty">暂无快照</div>';
+      updateCompareButton();
       return;
     }
     target.innerHTML = resourceSnapshots.map(function (item) {
       var active = item.id === selectedResourceSnapshotId ? " active" : "";
-      return '<button class="snapshot-item' + active + '" data-snapshot-id="' + escapeHtml(item.id) + '" type="button">' +
-        '<strong>' + escapeHtml(item.title) + '</strong>' +
-        '<span>' + escapeHtml(item.timeText) + '</span>' +
-        '<small>' + item.count + ' 个资源 · GPU ' + formatBytes(item.gpuMemory) + '</small>' +
-      '</button>';
+      var comparing = compareSnapshotIds.indexOf(item.id) !== -1 ? " comparing" : "";
+      return '<article class="snapshot-item' + active + comparing + '" data-snapshot-id="' + escapeHtml(item.id) + '">' +
+        '<button class="snapshot-main" data-snapshot-action="select" type="button" title="查看该资源快照">' +
+          '<strong>' + escapeHtml(item.title) + '</strong>' +
+          '<span>' + escapeHtml(item.timeText) + '</span>' +
+          '<small>' + item.count + ' 个资源 · GPU ' + formatBytes(item.gpuMemory) + '</small>' +
+        '</button>' +
+        '<div class="snapshot-item-actions">' +
+          '<button class="icon-button compare-pick-button' + comparing + '" data-snapshot-action="toggle-compare" type="button" title="选择该快照参与比较" aria-label="选择该快照参与比较">✓</button>' +
+          '<button class="icon-button delete-snapshot-button" data-snapshot-action="delete" type="button" title="删除该快照" aria-label="删除该快照">×</button>' +
+        '</div>' +
+      '</article>';
     }).join("");
+    updateCompareButton();
+  }
+
+  function updateCompareButton() {
+    var button = $("compareResourceSnapshotsBtn");
+    button.disabled = compareSnapshotIds.length !== 2;
+    button.classList.toggle("active", compareSnapshotIds.length === 2);
+    button.title = compareSnapshotIds.length === 2 ? "比较选中的两个快照" : "请选择两个快照后比较";
+  }
+
+  function toggleCompareSnapshot(id) {
+    resourceCompareResult = null;
+    var existingIndex = compareSnapshotIds.indexOf(id);
+    if (existingIndex !== -1) {
+      compareSnapshotIds.splice(existingIndex, 1);
+    } else {
+      if (compareSnapshotIds.length >= 2) compareSnapshotIds.shift();
+      compareSnapshotIds.push(id);
+    }
+    renderResources();
+  }
+
+  function deleteResourceSnapshot(id) {
+    resourceSnapshots = resourceSnapshots.filter(function (item) {
+      return item.id !== id;
+    });
+    compareSnapshotIds = compareSnapshotIds.filter(function (itemId) {
+      return itemId !== id;
+    });
+    if (selectedResourceSnapshotId === id) {
+      selectedResourceSnapshotId = resourceSnapshots[0] ? resourceSnapshots[0].id : null;
+    }
+    if (resourceCompareResult && resourceCompareResult.ids.indexOf(id) !== -1) {
+      resourceCompareResult = null;
+    }
+    renderResources();
+    setStatus("已删除资源快照", false);
+  }
+
+  function compareSelectedResourceSnapshots() {
+    if (compareSnapshotIds.length !== 2) {
+      setStatus("请选择两个快照后再比较", true);
+      return;
+    }
+    var left = resourceSnapshots.find(function (item) {
+      return item.id === compareSnapshotIds[0];
+    });
+    var right = resourceSnapshots.find(function (item) {
+      return item.id === compareSnapshotIds[1];
+    });
+    if (!left || !right) {
+      setStatus("比较失败: 快照不存在", true);
+      return;
+    }
+    resourceCompareResult = buildResourceComparison(left, right);
+    renderResources();
+    setStatus("已比较资源快照差异", false);
+  }
+
+  function buildResourceComparison(left, right) {
+    var leftMap = indexResources(left.resources);
+    var rightMap = indexResources(right.resources);
+    var keys = {};
+    Object.keys(leftMap).forEach(function (key) { keys[key] = true; });
+    Object.keys(rightMap).forEach(function (key) { keys[key] = true; });
+
+    var summary = { added: 0, removed: 0, changed: 0, same: 0 };
+    var rows = Object.keys(keys).map(function (key) {
+      var before = leftMap[key];
+      var after = rightMap[key];
+      if (!before && after) {
+        summary.added += 1;
+        return Object.assign({}, after, { changeType: "added", changeText: "新增", diffDetail: "新增资源" });
+      }
+      if (before && !after) {
+        summary.removed += 1;
+        return Object.assign({}, before, { changeType: "removed", changeText: "移除", diffDetail: "已移除资源" });
+      }
+      var detail = resourceDiffDetail(before, after);
+      if (detail) {
+        summary.changed += 1;
+        return Object.assign({}, after, { changeType: "changed", changeText: "变化", diffDetail: detail });
+      }
+      summary.same += 1;
+      return Object.assign({}, after, { changeType: "same", changeText: "未变", diffDetail: "未变" });
+    });
+    return {
+      ids: [left.id, right.id],
+      title: "比较: " + left.title + " → " + right.title +
+        " · 新增 " + summary.added +
+        " · 移除 " + summary.removed +
+        " · 变化 " + summary.changed +
+        " · 未变 " + summary.same,
+      rows: rows,
+      summary: summary
+    };
+  }
+
+  function indexResources(resources) {
+    var map = {};
+    (resources || []).forEach(function (item) {
+      map[resourceCompareKey(item)] = item;
+    });
+    return map;
+  }
+
+  function resourceCompareKey(item) {
+    return item.url || item.name || String(item.id || "");
+  }
+
+  function resourceDiffDetail(before, after) {
+    var changes = [];
+    if ((Number(before.bytes) || 0) !== (Number(after.bytes) || 0)) {
+      changes.push("GPU " + formatBytes(before.bytes) + " → " + formatBytes(after.bytes));
+    }
+    if ((before.type || "") !== (after.type || "")) {
+      changes.push("类型 " + (before.type || "-") + " → " + (after.type || "-"));
+    }
+    if ((before.size || "") !== (after.size || "")) {
+      changes.push("尺寸 " + (before.size || "-") + " → " + (after.size || "-"));
+    }
+    if ((before.refText || "") !== (after.refText || "")) {
+      changes.push("引用 " + (before.refText || "-") + " → " + (after.refText || "-"));
+    }
+    return changes.join("; ");
   }
 
   function sortResources(rows) {
@@ -294,12 +452,23 @@
   function sortableResourceValue(item, key) {
     if (key === "bytes") return Number(item.bytes) || 0;
     if (key === "type") return item.type || "";
+    if (key === "changeType") return changeTypeRank(item.changeType);
     if (key === "refCount") return item.refCount == null ? null : Number(item.refCount);
     if (key === "size") {
       var match = String(item.size || "").match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)/i);
       return match ? Number(match[1]) * Number(match[2]) : null;
     }
     return "";
+  }
+
+  function changeTypeRank(type) {
+    var ranks = {
+      added: 1,
+      removed: 2,
+      changed: 3,
+      same: 4
+    };
+    return ranks[type] || null;
   }
 
   function updateSortButtons() {
@@ -500,11 +669,25 @@
   $("takeResourceSnapshotBtn").addEventListener("click", createResourceSnapshot);
 
   $("resourceSnapshotList").addEventListener("click", function (event) {
+    var actionButton = event.target.closest("[data-snapshot-action]");
     var item = event.target.closest(".snapshot-item");
     if (!item) return;
-    selectedResourceSnapshotId = item.dataset.snapshotId;
+    var id = item.dataset.snapshotId;
+    var action = actionButton ? actionButton.dataset.snapshotAction : "select";
+    if (action === "delete") {
+      deleteResourceSnapshot(id);
+      return;
+    }
+    if (action === "toggle-compare") {
+      toggleCompareSnapshot(id);
+      return;
+    }
+    selectedResourceSnapshotId = id;
+    resourceCompareResult = null;
     renderResources();
   });
+
+  $("compareResourceSnapshotsBtn").addEventListener("click", compareSelectedResourceSnapshots);
 
   collectSnapshot();
   setInterval(collectSnapshot, 1000);

@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.1.1";
+    var profilerVersion = "0.1.5";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -13,7 +13,10 @@
       lastFrameTime: performance.now(),
       fpsWindow: [],
       drawCallTracker: null,
+      lastWebGLDrawTotal: 0,
+      lastWebGLDrawCalls: 0,
       consoleHooked: false,
+      webglHooked: false,
       statVisible: false
     };
 
@@ -98,10 +101,73 @@
       });
     }
 
+    function hookWebGLDrawCalls() {
+      if (state.webglHooked) return;
+      state.webglHooked = true;
+      var drawState = window.__LayaProfilerDrawState || { calls: 0 };
+      window.__LayaProfilerDrawState = drawState;
+
+      function wrapMethod(target, name) {
+        if (!target || typeof target[name] !== "function" || target[name].__layaProfilerWrapped) return;
+        var original = target[name];
+        var wrapped = function () {
+          var current = window.__LayaProfilerDrawState;
+          if (current) current.calls += 1;
+          return original.apply(this, arguments);
+        };
+        wrapped.__layaProfilerWrapped = true;
+        wrapped.__layaProfilerOriginal = original;
+        try {
+          target[name] = wrapped;
+        } catch (error) {}
+      }
+
+      function wrapContextPrototype(Context) {
+        if (!Context || !Context.prototype) return;
+        [
+          "drawArrays",
+          "drawElements",
+          "drawArraysInstanced",
+          "drawElementsInstanced",
+          "drawRangeElements",
+          "multiDrawArraysWEBGL",
+          "multiDrawElementsWEBGL"
+        ].forEach(function (name) {
+          wrapMethod(Context.prototype, name);
+        });
+
+        if (typeof Context.prototype.getExtension === "function" && !Context.prototype.getExtension.__layaProfilerWrapped) {
+          var originalGetExtension = Context.prototype.getExtension;
+          var wrappedGetExtension = function () {
+            var extension = originalGetExtension.apply(this, arguments);
+            if (extension) {
+              wrapMethod(extension, "drawArraysInstancedANGLE");
+              wrapMethod(extension, "drawElementsInstancedANGLE");
+              wrapMethod(extension, "multiDrawArraysWEBGL");
+              wrapMethod(extension, "multiDrawElementsWEBGL");
+            }
+            return extension;
+          };
+          wrappedGetExtension.__layaProfilerWrapped = true;
+          wrappedGetExtension.__layaProfilerOriginal = originalGetExtension;
+          try {
+            Context.prototype.getExtension = wrappedGetExtension;
+          } catch (error) {}
+        }
+      }
+
+      wrapContextPrototype(window.WebGLRenderingContext);
+      wrapContextPrototype(window.WebGL2RenderingContext);
+    }
+
     function sampleFrame(now) {
       var delta = now - state.lastFrameTime;
       state.lastFrameTime = now;
       state.frameId += 1;
+      var drawState = window.__LayaProfilerDrawState;
+      var drawTotal = drawState ? safeNumber(drawState.calls, 0) : 0;
+      state.lastWebGLDrawCalls = Math.max(0, drawTotal - state.lastWebGLDrawTotal);
+      state.lastWebGLDrawTotal = drawTotal;
       state.fpsWindow.push(now);
       while (state.fpsWindow.length && now - state.fpsWindow[0] > 1000) {
         state.fpsWindow.shift();
@@ -110,7 +176,8 @@
         time: Date.now(),
         frame: state.frameId,
         frameTime: round(delta, 2),
-        fps: state.fpsWindow.length
+        fps: state.fpsWindow.length,
+        drawCall: state.lastWebGLDrawCalls
       });
       if (state.frameSamples.length > 180) state.frameSamples.shift();
       requestAnimationFrame(sampleFrame);
@@ -619,33 +686,62 @@
       return 0;
     }
 
+    function firstPositiveNumber(values) {
+      for (var index = 0; index < values.length; index += 1) {
+        var value = Number(values[index]);
+        if (Number.isFinite(value) && value > 0) return value;
+      }
+      return 0;
+    }
+
     function drawCallValue(Laya, stat) {
       var render = Laya && Laya.Render;
       var renderInfo = Laya && Laya.RenderInfo;
-      var immediate = firstNumber([
+      var webglDrawCalls = safeNumber(state.lastWebGLDrawCalls, 0);
+      if (webglDrawCalls > 0) return round(webglDrawCalls, 0);
+      var immediate = firstPositiveNumber([
         stat.drawCallNum,
         stat.drawCalls,
         stat.drawCallCount,
+        stat.drawCallCountNum,
         stat.renderBatch,
         stat.renderBatchNum,
+        stat.renderBatches,
+        stat.batch,
+        stat.batchCount,
+        stat._drawCallNum,
+        stat._renderBatch,
+        stat._renderBatchNum,
         renderInfo && renderInfo.drawCall,
         renderInfo && renderInfo.drawCallNum,
+        renderInfo && renderInfo.drawCalls,
+        renderInfo && renderInfo.renderBatch,
+        renderInfo && renderInfo.renderBatchNum,
         render && render.drawCall,
-        render && render.drawCallNum
+        render && render.drawCallNum,
+        render && render.drawCalls,
+        render && render.renderBatch,
+        render && render.renderBatchNum
       ]);
       if (immediate > 0) return round(immediate, 0);
 
-      var raw = firstNumber([
+      var raw = firstPositiveNumber([
         stat.drawCall,
-        stat._drawCall
+        stat.drawCallTotal,
+        stat.totalDrawCall,
+        stat._drawCallTotal,
+        renderInfo && renderInfo.drawCallTotal,
+        renderInfo && renderInfo.totalDrawCall,
+        render && render.drawCallTotal,
+        render && render.totalDrawCall
       ]);
-      if (!raw) return 0;
+      if (!raw) return round(webglDrawCalls, 0);
 
       var tracker = state.drawCallTracker;
       var currentFrame = state.frameId;
       state.drawCallTracker = { value: raw, frame: currentFrame };
       if (!tracker || raw < tracker.value || currentFrame <= tracker.frame) {
-        return round(raw, 0);
+        return round(webglDrawCalls || raw, 0);
       }
 
       var delta = raw - tracker.value;
@@ -653,7 +749,7 @@
       if (delta > 0 && frameDelta > 0) {
         return round(delta / frameDelta, 0);
       }
-      return round(raw, 0);
+      return round(webglDrawCalls, 0);
     }
 
     function collectStats(Laya, nodeCount, resources) {
@@ -820,6 +916,7 @@
     }
 
     hookConsole();
+    hookWebGLDrawCalls();
     requestAnimationFrame(sampleFrame);
 
     window.__LayaProfiler = {
