@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Laya Profiler</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <strong>Laya Profiler</strong>
+            <span id="runtimeLabel">等待连接</span>
+          </div>
+        </div>
+        <div class="toolbar">
+          <label class="search">
+            <input id="searchInput" type="search" placeholder="搜索节点 / 资源 / 日志" />
+          </label>
+          <button id="pauseBtn" type="button" title="暂停采样">暂停</button>
+          <button id="refreshBtn" type="button" title="立即刷新">刷新</button>
+        </div>
+      </header>
+
+      <section class="metrics" aria-label="监控信息">
+        <article>
+          <span>FPS</span>
+          <strong id="metricFps">--</strong>
+        </article>
+        <article>
+          <span>FrameTime</span>
+          <strong id="metricFrame">--</strong>
+        </article>
+        <article>
+          <span>HeapUsed</span>
+          <strong id="metricHeap">--</strong>
+        </article>
+        <article>
+          <span>GPUMemory</span>
+          <strong id="metricGpu">--</strong>
+        </article>
+        <article>
+          <span>DrawCall</span>
+          <strong id="metricDraw">--</strong>
+        </article>
+        <article>
+          <span>Node</span>
+          <strong id="metricNode">--</strong>
+        </article>
+      </section>
+
+      <nav class="tabs" aria-label="功能面板">
+        <button class="tab active" data-tab="nodes" type="button">节点层级</button>
+        <button class="tab" data-tab="config" type="button">配置参数</button>
+        <button class="tab" data-tab="dev" type="button">开发面板</button>
+        <button class="tab" data-tab="resources" type="button">资源管理</button>
+        <button class="tab" data-tab="gpu" type="button">GPU 内存</button>
+        <button class="tab" data-tab="state" type="button">状态管理</button>
+        <button class="tab" data-tab="frame" type="button">帧调试</button>
+        <button class="tab" data-tab="console" type="button">控制台</button>
+        <button class="tab" data-tab="monitor" type="button">监控信息</button>
+      </nav>
+
+      <main class="content">
+        <section id="nodesPanel" class="panel active">
+          <div class="split">
+            <div class="pane">
+              <div class="pane-title">Stage 节点树</div>
+              <div id="nodeTree" class="tree empty">暂无节点数据</div>
+            </div>
+            <div class="pane">
+              <div class="pane-title">选中节点</div>
+              <pre id="nodeDetail" class="detail">选择左侧节点查看属性</pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="configPanel" class="panel">
+          <div id="configGrid" class="kv-grid"></div>
+        </section>
+
+        <section id="devPanel" class="panel">
+          <div class="dev-actions">
+            <button data-command="toggleStat" type="button">切换 Stat 面板</button>
+            <button data-command="gc" type="button">触发资源回收</button>
+            <button data-command="pauseGame" type="button">暂停计时器</button>
+            <button data-command="resumeGame" type="button">恢复计时器</button>
+          </div>
+          <pre id="devOutput" class="detail">开发命令会在当前被调试页面中执行。</pre>
+        </section>
+
+        <section id="resourcesPanel" class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>预览</th>
+                  <th>对象</th>
+                  <th>来源</th>
+                  <th>GPU 内存</th>
+                  <th>资源类型</th>
+                  <th>尺寸</th>
+                  <th>引用计数</th>
+                </tr>
+              </thead>
+              <tbody id="resourceRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="gpuPanel" class="panel">
+          <div class="gpu-summary">
+            <article><span>GPU 总量</span><strong id="gpuTotal">--</strong></article>
+            <article><span>已归因</span><strong id="gpuKnown">--</strong></article>
+            <article><span>未归因</span><strong id="gpuUnknown">--</strong></article>
+            <article><span>对象数</span><strong id="gpuCount">--</strong></article>
+          </div>
+          <div id="gpuBuckets" class="bucket-list"></div>
+        </section>
+
+        <section id="statePanel" class="panel">
+          <div id="stateGrid" class="kv-grid"></div>
+        </section>
+
+        <section id="framePanel" class="panel">
+          <div id="frameGrid" class="kv-grid"></div>
+          <canvas id="frameChart" width="900" height="220"></canvas>
+        </section>
+
+        <section id="consolePanel" class="panel">
+          <div id="consoleRows" class="console-list"></div>
+        </section>
+
+        <section id="monitorPanel" class="panel">
+          <div id="monitorGrid" class="kv-grid"></div>
+          <canvas id="monitorChart" width="900" height="260"></canvas>
+        </section>
+      </main>
+
+      <footer class="statusbar">
+        <span id="statusText">未采样</span>
+        <span id="lastUpdate">--</span>
+      </footer>
+      <div id="imagePreview" class="image-preview" aria-hidden="true">
+        <img id="imagePreviewImg" alt="" />
+        <div>
+          <strong id="imagePreviewName"></strong>
+          <span id="imagePreviewMeta"></span>
+        </div>
+      </div>
+    </div>
+
+    <script src="inspector.js"></script>
+    <script src="panel.js"></script>
+  </body>
+</html>

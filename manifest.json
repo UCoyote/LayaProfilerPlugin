@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Laya Profiler DevTools",
+  "description": "Inspect LayaAir web games: node tree, resources, GPU memory, frame stats, console and runtime state.",
+  "version": "0.1.0",
+  "devtools_page": "devtools.html",
+  "action": {
+    "default_title": "Laya Profiler",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: blob: http: https:;"
+  }
+}
