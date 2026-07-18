@@ -1,11 +1,12 @@
 (function () {
   function installLayaProfiler() {
-    if (window.__LayaProfiler && window.__LayaProfiler.version) {
+    var profilerVersion = "0.1.1";
+    if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
 
     var state = {
-      version: "0.1.0",
+      version: profilerVersion,
       logs: [],
       frameSamples: [],
       frameId: 0,
@@ -207,6 +208,18 @@
         var item = queue[index];
         if (!item || typeof item !== "object" || seen.has(item)) continue;
         seen.add(item);
+        if (Array.isArray(item)) {
+          item.forEach(function (child) {
+            if (child && typeof child === "object") queue.push(child);
+          });
+          continue;
+        }
+        if (item instanceof Map) {
+          item.forEach(function (child) {
+            if (child && typeof child === "object") queue.push(child);
+          });
+          continue;
+        }
         output.push(item);
         fields.forEach(function (field) {
           try {
@@ -310,7 +323,7 @@
       return dimensions.width && dimensions.height ? dimensions.width + "x" + dimensions.height : "-";
     }
 
-    function resourceTypeName(resource) {
+    function resourceTypeName(resource, url) {
       var priority = [
         "Texture2DArray",
         "RenderTexture",
@@ -348,10 +361,17 @@
       });
 
       var joined = names.join(" ");
+      var resourceUrl = url || sourceUrl(resource);
+      if (/\.(png|jpe?g|webp|gif|bmp|avif)(\?|#|$)/i.test(resourceUrl)) {
+        if (!joined || joined.indexOf("Texture") !== -1 || joined.indexOf("HTMLImageElement") !== -1) return "Texture2D";
+      }
       for (var index = 0; index < priority.length; index += 1) {
         if (joined.indexOf(priority[index]) !== -1) return priority[index];
       }
-      if (/\.(png|jpe?g|webp|gif|bmp|avif)(\?|#|$)/i.test(sourceUrl(resource))) return "Texture2D";
+      if (/\.(lh|ls|scene|prefab)(\?|#|$)/i.test(resourceUrl)) return "Prefab";
+      if (/\.(json|atlas)(\?|#|$)/i.test(resourceUrl)) return "Json";
+      if (/\.(mp3|wav|ogg|m4a)(\?|#|$)/i.test(resourceUrl)) return "Sound";
+      if (/\.(fnt|ttf|woff2?)(\?|#|$)/i.test(resourceUrl)) return "Font";
       return names[0] || typeName(resource);
     }
 
@@ -472,6 +492,20 @@
         }
         if (typeof item !== "object" || seen.has(item)) continue;
         seen.add(item);
+        if (Array.isArray(item)) {
+          item.forEach(function (child) {
+            if (typeof child === "string") candidates.push(child);
+            else if (child && typeof child === "object" && queue.length < 60) queue.push(child);
+          });
+          continue;
+        }
+        if (item instanceof Map) {
+          item.forEach(function (child) {
+            if (typeof child === "string") candidates.push(child);
+            else if (child && typeof child === "object" && queue.length < 60) queue.push(child);
+          });
+          continue;
+        }
         candidates.push(bitmapPreview(item));
         candidates.push(sourceUrl(item));
         fields.forEach(function (field) {
@@ -523,7 +557,7 @@
           url: url,
           previewUrl: previewUrl,
           source: source,
-          type: resourceTypeName(value),
+          type: resourceTypeName(value, url),
           bytes: bytes,
           size: resourceSize(value),
           refCount: refs,
@@ -533,13 +567,46 @@
         });
       }
 
+      function betterType(current, next) {
+        if (!current || current === "Array" || current === "Object" || current === "Unknown") return next;
+        if (current === "Texture" && next === "Texture2D") return next;
+        return current;
+      }
+
+      function mergeResources(items) {
+        var byKey = {};
+        items.forEach(function (item) {
+          var key = absoluteUrl(item.url) || item.name || String(item.id);
+          var existing = byKey[key];
+          if (!existing) {
+            byKey[key] = item;
+            return;
+          }
+          existing.previewUrl = existing.previewUrl || item.previewUrl;
+          existing.bytes = Math.max(existing.bytes || 0, item.bytes || 0);
+          if (!existing.size || existing.size === "-") existing.size = item.size;
+          existing.type = betterType(existing.type, item.type);
+          if (existing.refCount == null && item.refCount != null) {
+            existing.refCount = item.refCount;
+            existing.refText = item.refText;
+          }
+          if (existing.source.indexOf(item.source) === -1) {
+            existing.source += ", " + item.source;
+          }
+          existing.destroyed = existing.destroyed || item.destroyed;
+        });
+        return Object.keys(byKey).map(function (key) {
+          return byKey[key];
+        });
+      }
+
       sources.forEach(function (source) {
         valuesFromCollection(source.value).forEach(function (entry) {
           add(entry.key, entry.value, source.name);
         });
       });
 
-      return resources.sort(function (a, b) {
+      return mergeResources(resources).sort(function (a, b) {
         return b.bytes - a.bytes;
       }).slice(0, 1000);
     }

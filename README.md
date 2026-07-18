@@ -16,7 +16,7 @@
 - 节点层级：递归读取 `Laya.stage` 的显示树，支持搜索和选中查看属性。
 - 配置参数：读取 Laya 版本、Stage 尺寸、缩放模式、帧率模式、Canvas 数量、设备像素比和 `Laya.Config`。
 - 开发面板：支持切换 `Laya.Stat`、请求资源回收、暂停/恢复 `Laya.timer`。
-- 资源管理：尝试从 `Laya.Loader`、`Laya.loader`、`Laya.Resource` 的常见缓存结构读取资源，显示资源类型、GPU 内存、尺寸和引用计数，并为图片资源显示缩略图，鼠标悬停可查看大图。
+- 资源管理：点击「快照」冻结当前资源状态，在左侧快照列表中选择后查看资源清单；显示资源类型、GPU 内存、尺寸和引用计数，并为图片资源显示缩略图，鼠标悬停可查看大图。非图片资源悬停时会提示无法预览。
 - GPU 内存：优先读取资源对象和内部纹理对象上的显存字段；缺失时按纹理尺寸和格式估算。
 - 状态管理：读取常见全局状态对象，如 `store.getState()`、`gameState`、`Game`、`__APP_STATE__`。
 - 帧调试：展示 FPS、FrameTime、DrawCall、Triangle、ShaderCall，并绘制采样曲线。

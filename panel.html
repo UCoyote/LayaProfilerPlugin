@@ -93,21 +93,67 @@
         </section>
 
         <section id="resourcesPanel" class="panel">
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>预览</th>
-                  <th>对象</th>
-                  <th>来源</th>
-                  <th>GPU 内存</th>
-                  <th>资源类型</th>
-                  <th>尺寸</th>
-                  <th>引用计数</th>
-                </tr>
-              </thead>
-              <tbody id="resourceRows"></tbody>
-            </table>
+          <div class="resource-workspace">
+            <aside class="snapshot-sidebar">
+              <div class="snapshot-toolbar">
+                <strong>资源快照</strong>
+                <button id="takeResourceSnapshotBtn" type="button">快照</button>
+              </div>
+              <div id="resourceSnapshotList" class="snapshot-list">
+                <div class="empty">暂无快照</div>
+              </div>
+            </aside>
+            <div class="resource-table-panel">
+              <div id="resourceSnapshotTitle" class="resource-snapshot-title">点击“快照”保存当前资源状态</div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>预览</th>
+                      <th>对象</th>
+                      <th>来源</th>
+                      <th>
+                        <span class="sortable-head">
+                          GPU 内存
+                          <span>
+                            <button class="sort-btn" data-sort-key="bytes" data-sort-dir="asc" type="button" title="GPU 内存升序">▲</button>
+                            <button class="sort-btn" data-sort-key="bytes" data-sort-dir="desc" type="button" title="GPU 内存降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>
+                        <span class="sortable-head">
+                          资源类型
+                          <span>
+                            <button class="sort-btn" data-sort-key="type" data-sort-dir="asc" type="button" title="资源类型升序">▲</button>
+                            <button class="sort-btn" data-sort-key="type" data-sort-dir="desc" type="button" title="资源类型降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>
+                        <span class="sortable-head">
+                          尺寸
+                          <span>
+                            <button class="sort-btn" data-sort-key="size" data-sort-dir="asc" type="button" title="尺寸升序">▲</button>
+                            <button class="sort-btn" data-sort-key="size" data-sort-dir="desc" type="button" title="尺寸降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>
+                        <span class="sortable-head">
+                          引用计数
+                          <span>
+                            <button class="sort-btn" data-sort-key="refCount" data-sort-dir="asc" type="button" title="引用计数升序">▲</button>
+                            <button class="sort-btn" data-sort-key="refCount" data-sort-dir="desc" type="button" title="引用计数降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody id="resourceRows"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -146,7 +192,8 @@
       </footer>
       <div id="imagePreview" class="image-preview" aria-hidden="true">
         <img id="imagePreviewImg" alt="" />
-        <div>
+        <div id="imagePreviewMessage" class="image-preview-message"></div>
+        <div class="image-preview-detail">
           <strong id="imagePreviewName"></strong>
           <span id="imagePreviewMeta"></span>
         </div>

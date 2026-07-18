@@ -6,6 +6,9 @@
   var nodeIndex = {};
   var monitorHistory = [];
   var imagePreview = document.getElementById("imagePreview");
+  var resourceSort = { key: "bytes", dir: "desc" };
+  var resourceSnapshots = [];
+  var selectedResourceSnapshotId = null;
 
   var tabs = Array.from(document.querySelectorAll(".tab"));
   var panels = {
@@ -188,11 +191,26 @@
   }
 
   function renderResources() {
-    var rows = (snapshot.resources || []).filter(matchesQuery);
+    renderResourceSnapshotList();
+    var selectedSnapshot = getSelectedResourceSnapshot();
+    $("resourceSnapshotTitle").textContent = selectedSnapshot
+      ? selectedSnapshot.title + " · " + selectedSnapshot.count + " 个资源 · GPU " + formatBytes(selectedSnapshot.gpuMemory)
+      : "点击“快照”保存当前资源状态";
+    if (!selectedSnapshot) {
+      $("resourceRows").innerHTML = '<tr><td colspan="7" class="empty">暂无快照。点击左侧“快照”后，再选择快照查看资源列表。</td></tr>';
+      updateSortButtons();
+      return;
+    }
+
+    var rows = sortResources((selectedSnapshot.resources || []).filter(matchesQuery));
     $("resourceRows").innerHTML = rows.map(function (item) {
+      var previewMeta = item.size + " · " + item.type + " · GPU " + formatBytes(item.bytes);
       var preview = item.previewUrl
-        ? '<button class="resource-thumb has-preview" data-preview-url="' + escapeHtml(item.previewUrl) + '" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(item.size + " · " + item.type + " · GPU " + formatBytes(item.bytes)) + '" type="button"><img src="' + escapeHtml(item.previewUrl) + '" alt=""></button>'
-        : '<span class="resource-thumb empty-thumb"></span>';
+        ? '<button class="resource-thumb has-preview" data-preview-kind="image" data-preview-url="' + escapeHtml(item.previewUrl) + '" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(previewMeta) + '" type="button"><img src="' + escapeHtml(item.previewUrl) + '" alt=""></button>'
+        : '<button class="resource-thumb empty-thumb has-preview" data-preview-kind="none" data-preview-name="' + escapeHtml(item.name) + '" data-preview-meta="' + escapeHtml(previewMeta) + '" type="button"></button>';
+      var refCell = item.refCount === 0
+        ? '<td class="idle-ref"><span class="idle-dot"></span>空闲</td>'
+        : '<td>' + escapeHtml(item.refText == null ? "-" : item.refText) + '</td>';
       return '<tr>' +
         '<td class="preview-cell">' + preview + '</td>' +
         '<td title="' + escapeHtml(item.url) + '">' + escapeHtml(item.name) + '</td>' +
@@ -200,14 +218,109 @@
         '<td>' + formatBytes(item.bytes) + '</td>' +
         '<td>' + escapeHtml(item.type) + '</td>' +
         '<td>' + escapeHtml(item.size) + '</td>' +
-        '<td class="' + (item.refCount === 0 ? 'idle-ref' : '') + '">' + escapeHtml(item.refText == null ? "-" : item.refText) + '</td>' +
+        refCell +
       '</tr>';
     }).join("") || '<tr><td colspan="7" class="empty">暂无资源数据</td></tr>';
+    updateSortButtons();
+  }
+
+  function createResourceSnapshot() {
+    if (!snapshot || !snapshot.resources) {
+      setStatus("当前还没有可用资源数据", true);
+      return;
+    }
+    var resources = JSON.parse(JSON.stringify(snapshot.resources || []));
+    var createdAt = Date.now();
+    var id = "resource-snapshot-" + createdAt;
+    var gpuMemory = resources.reduce(function (sum, item) {
+      return sum + (Number(item.bytes) || 0);
+    }, 0);
+    var next = {
+      id: id,
+      title: "快照 " + (resourceSnapshots.length + 1),
+      createdAt: createdAt,
+      timeText: new Date(createdAt).toLocaleTimeString(),
+      count: resources.length,
+      gpuMemory: gpuMemory,
+      resources: resources
+    };
+    resourceSnapshots.unshift(next);
+    if (resourceSnapshots.length > 30) resourceSnapshots.pop();
+    selectedResourceSnapshotId = id;
+    renderResources();
+    setStatus("已创建资源快照: " + next.count + " 个资源", false);
+  }
+
+  function getSelectedResourceSnapshot() {
+    return resourceSnapshots.find(function (item) {
+      return item.id === selectedResourceSnapshotId;
+    }) || null;
+  }
+
+  function renderResourceSnapshotList() {
+    var target = $("resourceSnapshotList");
+    if (!resourceSnapshots.length) {
+      target.innerHTML = '<div class="empty">暂无快照</div>';
+      return;
+    }
+    target.innerHTML = resourceSnapshots.map(function (item) {
+      var active = item.id === selectedResourceSnapshotId ? " active" : "";
+      return '<button class="snapshot-item' + active + '" data-snapshot-id="' + escapeHtml(item.id) + '" type="button">' +
+        '<strong>' + escapeHtml(item.title) + '</strong>' +
+        '<span>' + escapeHtml(item.timeText) + '</span>' +
+        '<small>' + item.count + ' 个资源 · GPU ' + formatBytes(item.gpuMemory) + '</small>' +
+      '</button>';
+    }).join("");
+  }
+
+  function sortResources(rows) {
+    var key = resourceSort.key;
+    var dir = resourceSort.dir === "asc" ? 1 : -1;
+    return rows.slice().sort(function (left, right) {
+      var a = sortableResourceValue(left, key);
+      var b = sortableResourceValue(right, key);
+      var missingA = a == null || a === "";
+      var missingB = b == null || b === "";
+      if (missingA && missingB) return 0;
+      if (missingA) return 1;
+      if (missingB) return -1;
+      if (typeof a === "string" || typeof b === "string") {
+        return String(a).localeCompare(String(b), "zh-CN", { numeric: true }) * dir;
+      }
+      return (a - b) * dir;
+    });
+  }
+
+  function sortableResourceValue(item, key) {
+    if (key === "bytes") return Number(item.bytes) || 0;
+    if (key === "type") return item.type || "";
+    if (key === "refCount") return item.refCount == null ? null : Number(item.refCount);
+    if (key === "size") {
+      var match = String(item.size || "").match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)/i);
+      return match ? Number(match[1]) * Number(match[2]) : null;
+    }
+    return "";
+  }
+
+  function updateSortButtons() {
+    document.querySelectorAll(".sort-btn").forEach(function (button) {
+      var active = button.dataset.sortKey === resourceSort.key && button.dataset.sortDir === resourceSort.dir;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
   }
 
   function showImagePreview(target, event) {
-    if (!target || !target.dataset.previewUrl) return;
-    $("imagePreviewImg").src = target.dataset.previewUrl;
+    if (!target) return;
+    var isImage = target.dataset.previewKind === "image" && target.dataset.previewUrl;
+    $("imagePreviewImg").classList.toggle("hidden", !isImage);
+    $("imagePreviewMessage").classList.toggle("visible", !isImage);
+    $("imagePreviewMessage").textContent = isImage ? "" : "当前资源非图片，无法预览";
+    if (isImage) {
+      $("imagePreviewImg").src = target.dataset.previewUrl;
+    } else {
+      $("imagePreviewImg").removeAttribute("src");
+    }
     $("imagePreviewName").textContent = target.dataset.previewName || "图片资源";
     $("imagePreviewMeta").textContent = target.dataset.previewMeta || "";
     imagePreview.classList.add("visible");
@@ -232,6 +345,8 @@
 
   function hideImagePreview() {
     imagePreview.classList.remove("visible");
+    $("imagePreviewImg").classList.remove("hidden");
+    $("imagePreviewMessage").classList.remove("visible");
     $("imagePreviewImg").removeAttribute("src");
   }
 
@@ -370,6 +485,25 @@
   $("resourceRows").addEventListener("mouseout", function (event) {
     var target = event.target.closest(".has-preview");
     if (target && !target.contains(event.relatedTarget)) hideImagePreview();
+  });
+
+  document.querySelectorAll(".sort-btn").forEach(function (button) {
+    button.addEventListener("click", function () {
+      resourceSort = {
+        key: button.dataset.sortKey,
+        dir: button.dataset.sortDir
+      };
+      renderResources();
+    });
+  });
+
+  $("takeResourceSnapshotBtn").addEventListener("click", createResourceSnapshot);
+
+  $("resourceSnapshotList").addEventListener("click", function (event) {
+    var item = event.target.closest(".snapshot-item");
+    if (!item) return;
+    selectedResourceSnapshotId = item.dataset.snapshotId;
+    renderResources();
   });
 
   collectSnapshot();
