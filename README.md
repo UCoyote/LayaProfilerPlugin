@@ -1,0 +1,28 @@
+# Laya Profiler DevTools
+
+一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展原型。打开 DevTools 后会新增 `Laya Profiler` 面板，用于查看节点层级、配置参数、开发命令、资源列表、GPU 内存估算、状态快照、帧数据、控制台日志和监控指标。
+
+## 安装
+
+1. 打开 Chrome，进入 `chrome://extensions/`。
+2. 开启右上角的「开发者模式」。
+3. 点击「加载已解压的扩展程序」。
+4. 选择当前目录：`I:\LayaProject\LayaProfilerPlugin`。
+5. 打开一个 LayaAir Web 游戏页面，按 `F12` 打开 DevTools。
+6. 在 DevTools 顶部选择 `Laya Profiler` 面板。
+
+## 功能
+
+- 节点层级：递归读取 `Laya.stage` 的显示树，支持搜索和选中查看属性。
+- 配置参数：读取 Laya 版本、Stage 尺寸、缩放模式、帧率模式、Canvas 数量、设备像素比和 `Laya.Config`。
+- 开发面板：支持切换 `Laya.Stat`、请求资源回收、暂停/恢复 `Laya.timer`。
+- 资源管理：尝试从 `Laya.Loader`、`Laya.loader`、`Laya.Resource` 的常见缓存结构读取资源，显示资源类型、GPU 内存、尺寸和引用计数，并为图片资源显示缩略图，鼠标悬停可查看大图。
+- GPU 内存：优先读取资源对象和内部纹理对象上的显存字段；缺失时按纹理尺寸和格式估算。
+- 状态管理：读取常见全局状态对象，如 `store.getState()`、`gameState`、`Game`、`__APP_STATE__`。
+- 帧调试：展示 FPS、FrameTime、DrawCall、Triangle、ShaderCall，并绘制采样曲线。
+- 控制台：注入后会包装页面 `console` 方法并保留最近 300 条日志。
+- 监控信息：展示 `FPS`、`FrameTime`、`HeapUsed`、`GPUMemory`、`DrawCall`、`Node`。
+
+## 说明
+
+不同 LayaAir 版本和项目封装方式差异较大，所以资源缓存和 GPU 显存部分使用了兼容式探测。能从引擎对象读取到的字段会直接显示；缺失字段会用近似估算，适合定位趋势和大对象，不等同于浏览器底层精确显存统计。
