@@ -62,8 +62,6 @@
         <button class="tab" data-tab="dev" type="button" draggable="true">开发面板</button>
         <button class="tab" data-tab="resources" type="button" draggable="true">资源管理</button>
         <button class="tab" data-tab="gpu" type="button" draggable="true">GPU 内存</button>
-        <button class="tab" data-tab="state" type="button" draggable="true">状态管理</button>
-        <button class="tab" data-tab="frame" type="button" draggable="true">帧调试</button>
         <button class="tab" data-tab="console" type="button" draggable="true">控制台</button>
         <button class="tab" data-tab="monitor" type="button" draggable="true">监控信息</button>
       </nav>
@@ -211,15 +209,6 @@
             <article><span>对象数</span><strong id="gpuCount">--</strong></article>
           </div>
           <div id="gpuBuckets" class="bucket-list"></div>
-        </section>
-
-        <section id="statePanel" class="panel">
-          <div id="stateGrid" class="kv-grid"></div>
-        </section>
-
-        <section id="framePanel" class="panel">
-          <div id="frameGrid" class="kv-grid"></div>
-          <canvas id="frameChart" width="900" height="220"></canvas>
         </section>
 
         <section id="consolePanel" class="panel">

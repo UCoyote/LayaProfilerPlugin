@@ -1075,6 +1075,34 @@ button.inspector-toggle:hover {
   text-align: left;
 }
 
+.quick-compare-list {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.quick-compare-list > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quick-compare-button {
+  min-height: 24px;
+  max-width: 100%;
+  border-color: rgba(72, 168, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(72, 168, 255, 0.08);
+  color: #bfe3ff;
+  overflow: hidden;
+  padding: 0 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .snapshot-item:hover,
 .snapshot-item.active,
 .snapshot-item.comparing {
@@ -1626,10 +1654,6 @@ canvas {
   background: #181c24;
 }
 
-#frameChart {
-  height: 220px;
-}
-
 .console-toolbar {
   position: sticky;
   top: 0;
@@ -1686,7 +1710,7 @@ canvas {
 
 .console-row {
   display: grid;
-  grid-template-columns: 86px 54px minmax(0, 1fr);
+  grid-template-columns: 18px 86px 54px minmax(0, 1fr);
   gap: 8px;
   min-height: 30px;
   align-items: start;
@@ -1698,9 +1722,37 @@ canvas {
   background: #262d39;
 }
 
+.console-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.console-stack-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  min-height: 18px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+}
+
+.console-stack-toggle:hover {
+  background: rgba(87, 199, 255, 0.08);
+}
+
+.console-row:not(.has-stack) .console-stack-toggle {
+  visibility: hidden;
+}
+
 .console-row strong {
   text-transform: uppercase;
   font-size: 11px;
+}
+
+.console-message {
+  min-width: 0;
 }
 
 .console-row.log span,
@@ -1728,8 +1780,53 @@ canvas {
 }
 
 .console-row code {
+  display: block;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.console-stack {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding-left: 12px;
+  font-size: 12px;
+}
+
+.console-stack-frame {
+  display: grid;
+  grid-template-columns: minmax(120px, 240px) minmax(120px, 1fr);
+  gap: 10px;
+  min-height: 20px;
+  align-items: center;
+}
+
+.console-stack-fn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-source-link {
+  justify-self: start;
+  min-width: 0;
+  min-height: 20px;
+  max-width: 100%;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #58a6ff;
+  overflow: hidden;
+  padding: 0 4px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-source-link:hover {
+  background: rgba(88, 166, 255, 0.12);
+  color: #8cc8ff;
 }
 
 .statusbar {

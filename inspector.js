@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.1.17";
+    var profilerVersion = "0.1.20";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -28,6 +28,12 @@
     }
 
     function layaRuntimeVersion(Laya) {
+      try {
+        if (window.Laya && window.Laya.LayaEnv && window.Laya.LayaEnv.version) return window.Laya.LayaEnv.version;
+      } catch (error) {}
+      try {
+        if (Laya && Laya.LayaEnv && Laya.LayaEnv.version) return Laya.LayaEnv.version;
+      } catch (error) {}
       try {
         if (window.LayaEnv && window.LayaEnv.version) return window.LayaEnv.version;
       } catch (error) {}
@@ -86,12 +92,58 @@
     function hookConsole() {
       if (state.consoleHooked) return;
       state.consoleHooked = true;
+      function parseStackLine(line) {
+        var text = String(line || "").trim();
+        var match = text.match(/^at\s+(.*?)\s+\((.+):(\d+):(\d+)\)$/) ||
+          text.match(/^at\s+(.+):(\d+):(\d+)$/);
+        if (match && match.length === 5) {
+          return {
+            fn: match[1] || "(anonymous)",
+            url: match[2],
+            line: safeNumber(match[3], 0),
+            column: safeNumber(match[4], 0)
+          };
+        }
+        if (match && match.length === 4) {
+          return {
+            fn: "(anonymous)",
+            url: match[1],
+            line: safeNumber(match[2], 0),
+            column: safeNumber(match[3], 0)
+          };
+        }
+        match = text.match(/^(.*?)@(.+):(\d+):(\d+)$/);
+        if (match) {
+          return {
+            fn: match[1] || "(anonymous)",
+            url: match[2],
+            line: safeNumber(match[3], 0),
+            column: safeNumber(match[4], 0)
+          };
+        }
+        return null;
+      }
+
+      function captureConsoleStack() {
+        var stack = "";
+        try {
+          stack = new Error().stack || "";
+        } catch (error) {
+          stack = "";
+        }
+        if (!stack) return [];
+        return stack.split("\n").map(parseStackLine).filter(function (frame) {
+          if (!frame || !frame.url || !frame.line) return false;
+          return String(frame.url).indexOf("inspector.js") === -1;
+        }).slice(0, 80);
+      }
+
       ["log", "info", "warn", "error", "debug"].forEach(function (level) {
         var original = console[level];
         if (typeof original !== "function") return;
         console[level] = function () {
           var args = Array.prototype.slice.call(arguments);
-          state.logs.push({
+          var entry = {
             time: Date.now(),
             level: level,
             message: args.map(function (item) {
@@ -102,7 +154,11 @@
                 return String(item);
               }
             }).join(" ")
-          });
+          };
+          if (level === "warn" || level === "error") {
+            entry.stack = captureConsoleStack();
+          }
+          state.logs.push(entry);
           if (state.logs.length > 300) state.logs.shift();
           return original.apply(console, arguments);
         };

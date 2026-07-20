@@ -31,6 +31,7 @@
   var bottomDockHeight = 240;
   var tabLabels = {};
   var consoleLevelFilter = "all";
+  var expandedConsoleStacks = {};
 
   var mainTabsElement = document.getElementById("mainTabs");
   var mainContentElement = document.getElementById("mainContent");
@@ -45,8 +46,6 @@
     dev: document.getElementById("devPanel"),
     resources: document.getElementById("resourcesPanel"),
     gpu: document.getElementById("gpuPanel"),
-    state: document.getElementById("statePanel"),
-    frame: document.getElementById("framePanel"),
     console: document.getElementById("consolePanel"),
     monitor: document.getElementById("monitorPanel")
   };
@@ -184,8 +183,6 @@
     if (name === "config" && !isEditingGameConfig()) renderGameConfig();
     if (name === "resources" && !options.skipResourcePanel) renderResources();
     if (name === "gpu") renderGpu();
-    if (name === "state") renderKeyValues("stateGrid", snapshot.state);
-    if (name === "frame") renderFrame();
     if (name === "console") renderConsole();
     if (name === "monitor") renderMonitor();
   }
@@ -920,6 +917,7 @@
     target.innerHTML = resourceSnapshots.map(function (item) {
       var active = item.id === selectedResourceSnapshotId ? " active" : "";
       var comparing = compareSnapshotIds.indexOf(item.id) !== -1 ? " comparing" : "";
+      var quickCompare = active ? renderQuickCompareSnapshots(item.id) : "";
       return '<article class="snapshot-item' + active + comparing + '" data-snapshot-id="' + escapeHtml(item.id) + '">' +
         '<button class="snapshot-main" data-snapshot-action="select" type="button" title="查看该资源快照">' +
           '<strong>' + escapeHtml(item.title) + '</strong>' +
@@ -930,9 +928,25 @@
           '<button class="icon-button compare-pick-button' + comparing + '" data-snapshot-action="toggle-compare" type="button" title="选择该快照参与比较" aria-label="选择该快照参与比较">✓</button>' +
           '<button class="icon-button delete-snapshot-button" data-snapshot-action="delete" type="button" title="删除该快照" aria-label="删除该快照">×</button>' +
         '</div>' +
+        quickCompare +
       '</article>';
     }).join("");
     updateCompareButton();
+  }
+
+  function renderQuickCompareSnapshots(baseId) {
+    var options = resourceSnapshots.filter(function (item) {
+      return item.id !== baseId;
+    });
+    if (!options.length) return "";
+    return '<div class="quick-compare-list">' +
+      '<span>快速比较</span>' +
+      options.map(function (item) {
+        return '<button class="quick-compare-button" data-snapshot-action="quick-compare" data-compare-target-id="' + escapeHtml(item.id) + '" type="button" title="与 ' + escapeHtml(item.title) + ' 比较">' +
+          escapeHtml(item.title) +
+        '</button>';
+      }).join("") +
+    '</div>';
   }
 
   function updateCompareButton() {
@@ -976,16 +990,21 @@
       setStatus("请选择两个快照后再比较", true);
       return;
     }
+    compareResourceSnapshots(compareSnapshotIds[0], compareSnapshotIds[1]);
+  }
+
+  function compareResourceSnapshots(leftId, rightId) {
     var left = resourceSnapshots.find(function (item) {
-      return item.id === compareSnapshotIds[0];
+      return item.id === leftId;
     });
     var right = resourceSnapshots.find(function (item) {
-      return item.id === compareSnapshotIds[1];
+      return item.id === rightId;
     });
     if (!left || !right) {
       setStatus("比较失败: 快照不存在", true);
       return;
     }
+    compareSnapshotIds = [left.id, right.id];
     resourceCompareResult = buildResourceComparison(left, right);
     renderResources();
     setStatus("已比较资源快照差异", false);
@@ -1187,14 +1206,6 @@
     '</div>';
   }
 
-  function renderFrame() {
-    renderKeyValues("frameGrid", snapshot.frame.stats || {});
-    drawChart($("frameChart"), snapshot.frame.samples || [], [
-      { key: "fps", color: "#57c7ff", label: "FPS" },
-      { key: "frameTime", color: "#ffcc66", label: "FrameTime" }
-    ]);
-  }
-
   function renderConsole() {
     var queryInput = $("consoleSearchInput");
     var query = queryInput ? queryInput.value.trim().toLowerCase() : "";
@@ -1202,16 +1213,72 @@
       var normalizedLevel = row.level === "info" || row.level === "debug" ? "log" : row.level;
       if (consoleLevelFilter !== "all" && normalizedLevel !== consoleLevelFilter) return false;
       if (!query) return true;
-      return (String(row.message || "") + " " + String(row.level || "") + " " + new Date(row.time).toLocaleTimeString()).toLowerCase().includes(query);
+      var stackText = (row.stack || []).map(function (frame) {
+        return [frame.fn, frame.url, frame.line].join(" ");
+      }).join(" ");
+      return (String(row.message || "") + " " + String(row.level || "") + " " + new Date(row.time).toLocaleTimeString() + " " + stackText).toLowerCase().includes(query);
     }).slice(-300);
     $("consoleRows").innerHTML = rows.map(function (row) {
       var level = row.level === "info" || row.level === "debug" ? "log" : row.level;
-      return '<div class="console-row ' + escapeHtml(level) + '">' +
-        '<span>' + new Date(row.time).toLocaleTimeString() + '</span>' +
+      var stack = row.stack || [];
+      var stackKey = consoleStackKey(row);
+      var expanded = !!expandedConsoleStacks[stackKey];
+      return '<div class="console-row ' + escapeHtml(level) + (stack.length ? " has-stack" : "") + '">' +
+        '<button class="console-stack-toggle" data-console-stack-key="' + escapeHtml(stackKey) + '" type="button" title="' + (expanded ? "折叠调用堆栈" : "展开调用堆栈") + '">' + (stack.length ? (expanded ? "▾" : "▸") : "") + '</button>' +
+        '<span class="console-time">' + new Date(row.time).toLocaleTimeString() + '</span>' +
         '<strong>' + escapeHtml(level) + '</strong>' +
-        '<code>' + escapeHtml(row.message) + '</code>' +
+        '<div class="console-message">' +
+          '<code>' + escapeHtml(row.message) + '</code>' +
+          (expanded ? renderConsoleStack(stack) : "") +
+        '</div>' +
       '</div>';
     }).join("") || '<div class="empty">暂无控制台日志</div>';
+  }
+
+  function consoleStackKey(row) {
+    return [row.time, row.level, row.message].join("|");
+  }
+
+  function sourceName(url) {
+    var text = String(url || "");
+    var clean = text.split("?")[0].split("#")[0];
+    var parts = clean.split("/");
+    return parts[parts.length - 1] || text || "-";
+  }
+
+  function renderConsoleStack(stack) {
+    if (!stack || !stack.length) return "";
+    return '<div class="console-stack">' + stack.map(function (frame) {
+      return '<div class="console-stack-frame">' +
+        '<span class="console-stack-fn">' + escapeHtml(frame.fn || "(anonymous)") + '</span>' +
+        '<button class="console-source-link" data-source-url="' + escapeHtml(frame.url) + '" data-source-line="' + escapeHtml(frame.line) + '" data-source-column="' + escapeHtml(frame.column || 0) + '" type="button">' +
+          escapeHtml(sourceName(frame.url)) + ':' + escapeHtml(frame.line) +
+        '</button>' +
+      '</div>';
+    }).join("") + '</div>';
+  }
+
+  function openConsoleSource(target) {
+    var url = target.dataset.sourceUrl;
+    var line = Math.max(0, (Number(target.dataset.sourceLine) || 1) - 1);
+    var column = Math.max(0, (Number(target.dataset.sourceColumn) || 1) - 1);
+    if (!url || !chrome.devtools || !chrome.devtools.panels || typeof chrome.devtools.panels.openResource !== "function") {
+      setStatus("当前环境不支持打开 Sources 资源", true);
+      return;
+    }
+    try {
+      chrome.devtools.panels.openResource(url, line, column, function () {
+        setStatus("已打开源码: " + sourceName(url) + ":" + (line + 1), false);
+      });
+    } catch (error) {
+      try {
+        chrome.devtools.panels.openResource(url, line, function () {
+          setStatus("已打开源码: " + sourceName(url) + ":" + (line + 1), false);
+        });
+      } catch (innerError) {
+        setStatus(innerError.message || "打开 Sources 失败", true);
+      }
+    }
   }
 
   function updateConsoleFilters() {
@@ -1474,6 +1541,18 @@
 
   $("consoleSearchInput").addEventListener("input", renderConsole);
   $("clearConsoleBtn").addEventListener("click", clearConsoleLogs);
+  $("consoleRows").addEventListener("click", function (event) {
+    var toggle = event.target.closest(".console-stack-toggle[data-console-stack-key]");
+    if (toggle) {
+      var key = toggle.dataset.consoleStackKey;
+      expandedConsoleStacks[key] = !expandedConsoleStacks[key];
+      renderConsole();
+      return;
+    }
+    var source = event.target.closest(".console-source-link");
+    if (!source) return;
+    openConsoleSource(source);
+  });
 
   $("configList").addEventListener("click", function (event) {
     var row = event.target.closest("[data-config-table]");
@@ -1688,6 +1767,10 @@
     }
     if (action === "toggle-compare") {
       toggleCompareSnapshot(id);
+      return;
+    }
+    if (action === "quick-compare") {
+      compareResourceSnapshots(id, actionButton.dataset.compareTargetId);
       return;
     }
     selectedResourceSnapshotId = id;
