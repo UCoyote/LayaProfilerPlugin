@@ -1,6 +1,7 @@
 (function () {
   var snapshot = null;
-  var activeTab = "nodes";
+  var activeMainTab = "nodes";
+  var activeBottomTab = null;
   var paused = false;
   var selectedNodePath = null;
   var expandedNodePaths = { "0": true };
@@ -25,8 +26,19 @@
   var configVirtualScrollTop = 0;
   var configVirtualRowHeight = 32;
   var expandedGpuBuckets = {};
+  var dockedTabs = {};
+  var draggedTab = null;
+  var bottomDockHeight = 240;
+  var tabLabels = {};
+  var consoleLevelFilter = "all";
 
-  var tabs = Array.from(document.querySelectorAll(".tab"));
+  var mainTabsElement = document.getElementById("mainTabs");
+  var mainContentElement = document.getElementById("mainContent");
+  var bottomDockElement = document.getElementById("bottomDock");
+  var bottomTabsElement = document.getElementById("bottomTabs");
+  var bottomDockContentElement = document.getElementById("bottomDockContent");
+  var bottomDockResizer = document.getElementById("bottomDockResizer");
+  var tabs = Array.from(document.querySelectorAll("#mainTabs .tab"));
   var panels = {
     nodes: document.getElementById("nodesPanel"),
     config: document.getElementById("configPanel"),
@@ -38,6 +50,9 @@
     console: document.getElementById("consolePanel"),
     monitor: document.getElementById("monitorPanel")
   };
+  tabs.forEach(function (tab) {
+    tabLabels[tab.dataset.tab] = tab.textContent.trim();
+  });
 
   function $(id) {
     return document.getElementById(id);
@@ -118,15 +133,116 @@
     $("lastUpdate").textContent = new Date().toLocaleTimeString();
   }
 
-  function selectTab(name) {
-    activeTab = name;
+  function selectTab(name, location) {
+    if (location === "bottom") {
+      activeBottomTab = name;
+    } else {
+      activeMainTab = name;
+    }
+    updatePanelVisibility();
+    render();
+  }
+
+  function tabLocation(name) {
+    return dockedTabs[name] ? "bottom" : "main";
+  }
+
+  function dockedTabNames() {
+    return Object.keys(dockedTabs).filter(function (name) {
+      return !!dockedTabs[name];
+    });
+  }
+
+  function mainTabNames() {
+    return Object.keys(panels).filter(function (name) {
+      return !dockedTabs[name];
+    });
+  }
+
+  function firstTab(names, fallback) {
+    return names.length ? names[0] : fallback;
+  }
+
+  function updatePanelVisibility() {
     tabs.forEach(function (tab) {
-      tab.classList.toggle("active", tab.dataset.tab === name);
+      tab.classList.toggle("active", tab.dataset.tab === activeMainTab && tabLocation(tab.dataset.tab) === "main");
+      tab.classList.toggle("docked", tabLocation(tab.dataset.tab) === "bottom");
+    });
+    Array.from(bottomTabsElement.querySelectorAll(".tab")).forEach(function (tab) {
+      tab.classList.toggle("active", tab.dataset.tab === activeBottomTab);
     });
     Object.keys(panels).forEach(function (key) {
-      panels[key].classList.toggle("active", key === name);
+      var location = tabLocation(key);
+      var active = location === "bottom" ? key === activeBottomTab : key === activeMainTab;
+      panels[key].classList.toggle("active", active);
     });
+  }
+
+  function renderPanel(name, options) {
+    if (!name) return;
+    if (name === "nodes" && !isEditingNodeInspector()) renderNodes();
+    if (name === "config" && !isEditingGameConfig()) renderGameConfig();
+    if (name === "resources" && !options.skipResourcePanel) renderResources();
+    if (name === "gpu") renderGpu();
+    if (name === "state") renderKeyValues("stateGrid", snapshot.state);
+    if (name === "frame") renderFrame();
+    if (name === "console") renderConsole();
+    if (name === "monitor") renderMonitor();
+  }
+
+  function renderBottomTabs() {
+    var names = dockedTabNames();
+    bottomDockElement.classList.toggle("empty", !names.length);
+    bottomDockElement.style.setProperty("--bottom-dock-height", bottomDockHeight + "px");
+    bottomTabsElement.innerHTML = names.map(function (name) {
+      return '<button class="tab" data-tab="' + escapeHtml(name) + '" type="button" draggable="true">' + escapeHtml(tabLabels[name] || name) + '</button>';
+    }).join("");
+    bottomDockElement.classList.toggle("has-content", !!names.length);
+  }
+
+  function movePanelToLocation(name, location) {
+    var panel = panels[name];
+    if (!panel) return;
+    if (location === "bottom") {
+      bottomDockContentElement.appendChild(panel);
+    } else {
+      mainContentElement.appendChild(panel);
+    }
+  }
+
+  function dockTab(name) {
+    if (!panels[name] || dockedTabs[name]) return;
+    dockedTabs[name] = true;
+    movePanelToLocation(name, "bottom");
+    activeBottomTab = name;
+    if (activeMainTab === name) {
+      activeMainTab = firstTab(mainTabNames(), null);
+    }
+    renderBottomTabs();
+    updatePanelVisibility();
     render();
+  }
+
+  function undockTab(name) {
+    if (!panels[name] || !dockedTabs[name]) return;
+    delete dockedTabs[name];
+    movePanelToLocation(name, "main");
+    activeMainTab = name;
+    if (activeBottomTab === name) {
+      activeBottomTab = firstTab(dockedTabNames(), null);
+    }
+    renderBottomTabs();
+    updatePanelVisibility();
+    render();
+  }
+
+  function canDockFromEvent(event) {
+    var rect = bottomDockElement.getBoundingClientRect();
+    return event.clientY >= rect.top - 48;
+  }
+
+  function updateDockDropState(active) {
+    bottomDockElement.classList.toggle("drop-target", !!active);
   }
 
   function render(options) {
@@ -141,14 +257,8 @@
     $("metricNode").textContent = formatNumber(snapshot.monitor.node, 0);
     setStatus(snapshot.detected ? "已连接 Laya 运行时" : "当前页面未检测到 Laya", !snapshot.detected);
 
-    if (activeTab === "nodes" && !isEditingNodeInspector()) renderNodes();
-    if (activeTab === "config" && !isEditingGameConfig()) renderGameConfig();
-    if (activeTab === "resources" && !options.skipResourcePanel) renderResources();
-    if (activeTab === "gpu") renderGpu();
-    if (activeTab === "state") renderKeyValues("stateGrid", snapshot.state);
-    if (activeTab === "frame") renderFrame();
-    if (activeTab === "console") renderConsole();
-    if (activeTab === "monitor") renderMonitor();
+    renderPanel(activeMainTab, options);
+    if (activeBottomTab && activeBottomTab !== activeMainTab) renderPanel(activeBottomTab, options);
   }
 
   function getQuery() {
@@ -1086,14 +1196,40 @@
   }
 
   function renderConsole() {
-    var rows = (snapshot.console || []).filter(matchesQuery).slice(-200);
+    var queryInput = $("consoleSearchInput");
+    var query = queryInput ? queryInput.value.trim().toLowerCase() : "";
+    var rows = (snapshot.console || []).filter(function (row) {
+      var normalizedLevel = row.level === "info" || row.level === "debug" ? "log" : row.level;
+      if (consoleLevelFilter !== "all" && normalizedLevel !== consoleLevelFilter) return false;
+      if (!query) return true;
+      return (String(row.message || "") + " " + String(row.level || "") + " " + new Date(row.time).toLocaleTimeString()).toLowerCase().includes(query);
+    }).slice(-300);
     $("consoleRows").innerHTML = rows.map(function (row) {
-      return '<div class="console-row ' + escapeHtml(row.level) + '">' +
+      var level = row.level === "info" || row.level === "debug" ? "log" : row.level;
+      return '<div class="console-row ' + escapeHtml(level) + '">' +
         '<span>' + new Date(row.time).toLocaleTimeString() + '</span>' +
-        '<strong>' + escapeHtml(row.level) + '</strong>' +
+        '<strong>' + escapeHtml(level) + '</strong>' +
         '<code>' + escapeHtml(row.message) + '</code>' +
       '</div>';
     }).join("") || '<div class="empty">暂无控制台日志</div>';
+  }
+
+  function updateConsoleFilters() {
+    document.querySelectorAll(".console-filter").forEach(function (button) {
+      button.classList.toggle("active", button.dataset.consoleLevel === consoleLevelFilter);
+    });
+  }
+
+  async function clearConsoleLogs() {
+    var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify("clearConsole") + ")");
+    var response = result.value || result;
+    if (response && response.ok) {
+      if (snapshot) snapshot.console = [];
+      setStatus(response.message || "控制台日志已清除", false);
+      renderConsole();
+    } else {
+      setStatus(response && response.message ? response.message : "清除控制台日志失败", true);
+    }
   }
 
   function renderMonitor() {
@@ -1162,8 +1298,122 @@
 
   tabs.forEach(function (tab) {
     tab.addEventListener("click", function () {
-      selectTab(tab.dataset.tab);
+      selectTab(tab.dataset.tab, "main");
     });
+    tab.addEventListener("dragstart", function (event) {
+      draggedTab = tab.dataset.tab;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedTab);
+      document.body.classList.add("tab-dragging");
+    });
+    tab.addEventListener("dragend", function () {
+      draggedTab = null;
+      document.body.classList.remove("tab-dragging");
+      updateDockDropState(false);
+    });
+  });
+
+  bottomTabsElement.addEventListener("click", function (event) {
+    var tab = event.target.closest(".tab[data-tab]");
+    if (!tab) return;
+    selectTab(tab.dataset.tab, "bottom");
+  });
+
+  bottomTabsElement.addEventListener("dragstart", function (event) {
+    var tab = event.target.closest(".tab[data-tab]");
+    if (!tab) return;
+    draggedTab = tab.dataset.tab;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", draggedTab);
+    document.body.classList.add("tab-dragging");
+  });
+
+  bottomTabsElement.addEventListener("dragend", function () {
+    draggedTab = null;
+    document.body.classList.remove("tab-dragging");
+    updateDockDropState(false);
+  });
+
+  [bottomDockElement, bottomTabsElement, bottomDockContentElement].forEach(function (target) {
+    target.addEventListener("dragover", function (event) {
+      if (!draggedTab) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      updateDockDropState(true);
+    });
+    target.addEventListener("dragleave", function (event) {
+      if (!bottomDockElement.contains(event.relatedTarget)) updateDockDropState(false);
+    });
+    target.addEventListener("drop", function (event) {
+      if (!draggedTab) return;
+      event.preventDefault();
+      dockTab(draggedTab);
+      draggedTab = null;
+      document.body.classList.remove("tab-dragging");
+      updateDockDropState(false);
+    });
+  });
+
+  [mainTabsElement, mainContentElement].forEach(function (target) {
+    target.addEventListener("dragover", function (event) {
+      if (!draggedTab || !dockedTabs[draggedTab]) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    });
+    target.addEventListener("drop", function (event) {
+      if (!draggedTab || !dockedTabs[draggedTab]) return;
+      event.preventDefault();
+      undockTab(draggedTab);
+      draggedTab = null;
+      document.body.classList.remove("tab-dragging");
+      updateDockDropState(false);
+    });
+  });
+
+  document.addEventListener("dragover", function (event) {
+    if (!draggedTab || dockedTabs[draggedTab]) return;
+    if (canDockFromEvent(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      updateDockDropState(true);
+    } else {
+      updateDockDropState(false);
+    }
+  });
+
+  document.addEventListener("drop", function (event) {
+    if (!draggedTab || dockedTabs[draggedTab] || !canDockFromEvent(event)) return;
+    event.preventDefault();
+    dockTab(draggedTab);
+    draggedTab = null;
+    document.body.classList.remove("tab-dragging");
+    updateDockDropState(false);
+  });
+
+  bottomDockResizer.addEventListener("pointerdown", function (event) {
+    if (!dockedTabNames().length) return;
+    event.preventDefault();
+    var startY = event.clientY;
+    var startHeight = bottomDockHeight;
+    var maxHeight = Math.max(180, Math.floor(window.innerHeight * 0.75));
+    bottomDockResizer.setPointerCapture(event.pointerId);
+
+    function move(moveEvent) {
+      var delta = startY - moveEvent.clientY;
+      bottomDockHeight = Math.max(120, Math.min(maxHeight, startHeight + delta));
+      bottomDockElement.style.setProperty("--bottom-dock-height", bottomDockHeight + "px");
+    }
+
+    function up(upEvent) {
+      bottomDockResizer.releasePointerCapture(upEvent.pointerId);
+      bottomDockResizer.removeEventListener("pointermove", move);
+      bottomDockResizer.removeEventListener("pointerup", up);
+      bottomDockResizer.removeEventListener("pointercancel", up);
+    }
+
+    bottomDockResizer.addEventListener("pointermove", move);
+    bottomDockResizer.addEventListener("pointerup", up);
+    bottomDockResizer.addEventListener("pointercancel", up);
   });
 
   $("nodeTree").addEventListener("click", function (event) {
@@ -1213,6 +1463,17 @@
     var button = event.target.closest("button[data-command]");
     if (button) runCommand(button.dataset.command);
   });
+
+  document.querySelector(".console-levels").addEventListener("click", function (event) {
+    var button = event.target.closest("[data-console-level]");
+    if (!button) return;
+    consoleLevelFilter = button.dataset.consoleLevel || "all";
+    updateConsoleFilters();
+    renderConsole();
+  });
+
+  $("consoleSearchInput").addEventListener("input", renderConsole);
+  $("clearConsoleBtn").addEventListener("click", clearConsoleLogs);
 
   $("configList").addEventListener("click", function (event) {
     var row = event.target.closest("[data-config-table]");
@@ -1436,6 +1697,10 @@
 
   $("compareResourceSnapshotsBtn").addEventListener("click", compareSelectedResourceSnapshots);
 
+  dockTab("console");
+  updateConsoleFilters();
+  renderBottomTabs();
+  updatePanelVisibility();
   collectSnapshot();
   setInterval(collectSnapshot, 1000);
 })();

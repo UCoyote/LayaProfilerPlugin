@@ -56,19 +56,19 @@
         </article>
       </section>
 
-      <nav class="tabs" aria-label="功能面板">
-        <button class="tab active" data-tab="nodes" type="button">节点层级</button>
-        <button class="tab" data-tab="config" type="button">游戏配置</button>
-        <button class="tab" data-tab="dev" type="button">开发面板</button>
-        <button class="tab" data-tab="resources" type="button">资源管理</button>
-        <button class="tab" data-tab="gpu" type="button">GPU 内存</button>
-        <button class="tab" data-tab="state" type="button">状态管理</button>
-        <button class="tab" data-tab="frame" type="button">帧调试</button>
-        <button class="tab" data-tab="console" type="button">控制台</button>
-        <button class="tab" data-tab="monitor" type="button">监控信息</button>
+      <nav id="mainTabs" class="tabs main-tabs" aria-label="功能面板">
+        <button class="tab active" data-tab="nodes" type="button" draggable="true">节点层级</button>
+        <button class="tab" data-tab="config" type="button" draggable="true">游戏配置</button>
+        <button class="tab" data-tab="dev" type="button" draggable="true">开发面板</button>
+        <button class="tab" data-tab="resources" type="button" draggable="true">资源管理</button>
+        <button class="tab" data-tab="gpu" type="button" draggable="true">GPU 内存</button>
+        <button class="tab" data-tab="state" type="button" draggable="true">状态管理</button>
+        <button class="tab" data-tab="frame" type="button" draggable="true">帧调试</button>
+        <button class="tab" data-tab="console" type="button" draggable="true">控制台</button>
+        <button class="tab" data-tab="monitor" type="button" draggable="true">监控信息</button>
       </nav>
 
-      <main class="content">
+      <main id="mainContent" class="content">
         <section id="nodesPanel" class="panel active">
           <div class="split">
             <div class="pane">
@@ -223,6 +223,16 @@
         </section>
 
         <section id="consolePanel" class="panel">
+          <div class="console-toolbar">
+            <div class="console-levels" role="group" aria-label="日志分类">
+              <button class="console-filter active" data-console-level="all" type="button">All</button>
+              <button class="console-filter" data-console-level="log" type="button">Log</button>
+              <button class="console-filter" data-console-level="warn" type="button">Warn</button>
+              <button class="console-filter" data-console-level="error" type="button">Error</button>
+            </div>
+            <input id="consoleSearchInput" type="search" placeholder="搜索控制台日志" />
+            <button id="clearConsoleBtn" type="button">清除</button>
+          </div>
           <div id="consoleRows" class="console-list"></div>
         </section>
 
@@ -231,6 +241,13 @@
           <canvas id="monitorChart" width="900" height="260"></canvas>
         </section>
       </main>
+
+      <section id="bottomDock" class="bottom-dock empty" aria-label="底部停靠区域">
+        <div id="bottomDockResizer" class="bottom-dock-resizer" title="上下拖动调整底部区域高度"></div>
+        <nav id="bottomTabs" class="tabs bottom-tabs" aria-label="底部停靠分页"></nav>
+        <div id="bottomDockContent" class="bottom-dock-content"></div>
+        <div class="bottom-dock-placeholder">拖拽分页到这里停靠</div>
+      </section>
 
       <footer class="statusbar">
         <span id="statusText">未采样</span>

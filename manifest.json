@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Laya Profiler DevTools",
   "description": "LayaAir引擎性能分析工具，提供节点树、资源、GPU内存占用、帧统计、控制台和运行时状态的分析。",
-  "version": "0.1.15",
+  "version": "0.1.17",
   "author": "UCoyote",
   "devtools_page": "devtools.html",
   "icons": {

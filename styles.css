@@ -54,7 +54,7 @@ button:active {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 48px auto 38px 1fr 26px;
+  grid-template-rows: 48px auto 38px minmax(0, 1fr) auto 26px;
   width: 100%;
   height: 100vh;
   min-width: 780px;
@@ -207,9 +207,76 @@ button:active {
   background: #252b35;
 }
 
+.main-tabs .tab.docked {
+  display: none;
+}
+
 .content {
   min-height: 0;
   overflow: hidden;
+}
+
+.bottom-dock {
+  position: relative;
+  display: grid;
+  grid-template-rows: 6px 38px minmax(0, 1fr);
+  height: var(--bottom-dock-height, 240px);
+  min-height: 120px;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.bottom-dock.empty {
+  grid-template-rows: 6px 36px;
+  height: 42px;
+  min-height: 42px;
+}
+
+.bottom-dock-resizer {
+  height: 6px;
+  cursor: ns-resize;
+  background: #171c24;
+}
+
+.bottom-dock-resizer:hover,
+.bottom-dock.drop-target .bottom-dock-resizer {
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.bottom-tabs {
+  border-bottom: 1px solid var(--line);
+  background: #1d222b;
+}
+
+.bottom-dock-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bottom-dock-placeholder {
+  display: none;
+  align-items: center;
+  height: 36px;
+  padding: 0 14px;
+  color: var(--muted);
+}
+
+.bottom-dock.empty .bottom-dock-placeholder {
+  display: flex;
+}
+
+.bottom-dock.empty .bottom-tabs,
+.bottom-dock.empty .bottom-dock-content {
+  display: none;
+}
+
+.bottom-dock.drop-target {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+body.tab-dragging .bottom-dock {
+  border-top-color: var(--accent);
 }
 
 .panel {
@@ -1563,8 +1630,57 @@ canvas {
   height: 220px;
 }
 
+.console-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+  background: #20252e;
+}
+
+.console-levels {
+  display: flex;
+  gap: 4px;
+}
+
+.console-filter {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.console-filter.active {
+  border-color: var(--accent);
+  color: #f6fbff;
+  background: rgba(72, 168, 255, 0.14);
+}
+
+.console-toolbar input {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #171d26;
+  color: var(--text);
+  padding: 0 8px;
+}
+
+.console-toolbar input:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.console-toolbar > button {
+  min-height: 28px;
+  padding: 0 12px;
+}
+
 .console-list {
-  padding: 8px 0 18px;
+  padding: 0 0 18px;
   font-family: Consolas, "SFMono-Regular", monospace;
 }
 
@@ -1582,27 +1698,38 @@ canvas {
   background: #262d39;
 }
 
-.console-row span {
-  color: var(--muted);
-}
-
 .console-row strong {
   text-transform: uppercase;
   font-size: 11px;
 }
 
+.console-row.log span,
+.console-row.log strong,
+.console-row.log code {
+  color: #d9e0ec;
+}
+
+.console-row.warn span,
 .console-row.warn strong {
   color: var(--warn);
 }
 
+.console-row.warn code {
+  color: #ffe0a3;
+}
+
+.console-row.error span,
 .console-row.error strong {
   color: var(--error);
+}
+
+.console-row.error code {
+  color: #ffb5bd;
 }
 
 .console-row code {
   white-space: pre-wrap;
   word-break: break-word;
-  color: #d9e0ec;
 }
 
 .statusbar {
@@ -1666,7 +1793,7 @@ canvas {
   }
 
   .app-shell {
-    grid-template-rows: auto auto 38px 1fr 26px;
+    grid-template-rows: auto auto 38px minmax(0, 1fr) auto 26px;
   }
 
   .toolbar {

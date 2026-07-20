@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.1.15";
+    var profilerVersion = "0.1.17";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -1406,6 +1406,10 @@
 
     function command(name) {
       var Laya = findLaya();
+      if (name === "clearConsole" || name && name.type === "clearConsole") {
+        state.logs = [];
+        return { ok: true, message: "控制台日志已清除" };
+      }
       if (!Laya) return { ok: false, message: "未检测到 Laya 运行时" };
       try {
         if (name === "toggleStat") {
