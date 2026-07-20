@@ -21,6 +21,8 @@
   var expandedConfigPaths = { "[]": true };
   var configInitialDataByTable = {};
   var configModifiedMap = {};
+  var configTemplates = [];
+  var selectedConfigTemplateId = null;
   var showingConfigChanges = false;
   var selectedConfigRows = [];
   var configVirtualScrollTop = 0;
@@ -180,7 +182,7 @@
   function renderPanel(name, options) {
     if (!name) return;
     if (name === "nodes" && !isEditingNodeInspector()) renderNodes();
-    if (name === "config" && !isEditingGameConfig()) renderGameConfig();
+    if (name === "config" && !isInteractingGameConfig()) renderGameConfig();
     if (name === "resources" && !options.skipResourcePanel) renderResources();
     if (name === "gpu") renderGpu();
     if (name === "console") renderConsole();
@@ -289,6 +291,13 @@
     return active && $("configDetail") && $("configDetail").contains(active) && active.matches("input");
   }
 
+  function isInteractingGameConfig() {
+    if (isEditingGameConfig()) return true;
+    var detail = $("configDetail");
+    var list = $("configList");
+    return !!((detail && detail.matches(":hover")) || (list && list.matches(":hover")));
+  }
+
   function flattenNodes(node, depth, rows) {
     if (!node) return;
     nodeIndex[node.path] = node;
@@ -353,7 +362,7 @@
         '<header><strong>节点信息</strong><span>NodeInfo</span></header>' +
         inspectorField("名称", "name", node.name, "text") +
         inspectorToggleRow("激活", "active", node.active, "可见", "visible", node.visible) +
-        '<button class="inspector-console" type="button" disabled>输出到控制台</button>' +
+        '<button class="inspector-console" data-node-action="console" type="button">输出到控制台</button>' +
       '</section>' +
       '<section class="inspector-section">' +
         '<header><strong>基础</strong><span>Node2D</span></header>' +
@@ -487,6 +496,18 @@
     return current;
   }
 
+  function configArrayAncestorPath(data, path) {
+    var current = data;
+    var arrayPath = null;
+    for (var index = 0; index < path.length; index += 1) {
+      if (Array.isArray(current)) arrayPath = path.slice(0, index);
+      if (!current || typeof current !== "object") return arrayPath;
+      current = current[path[index]];
+    }
+    if (Array.isArray(current)) arrayPath = path.slice();
+    return arrayPath;
+  }
+
   function configChangeId(table, path) {
     return table + "::" + configPathKey(path);
   }
@@ -515,6 +536,17 @@
       current: cloneConfigValue(currentValue),
       time: Date.now()
     };
+  }
+
+  function clearConfigChangesUnderPath(table, path) {
+    Object.keys(configModifiedMap).forEach(function (id) {
+      var change = configModifiedMap[id];
+      if (!change || change.table !== table) return;
+      var sameRoot = path.every(function (part, index) {
+        return change.path[index] === part;
+      });
+      if (sameRoot && change.path.length > path.length) delete configModifiedMap[id];
+    });
   }
 
   function modifiedConfigList() {
@@ -619,7 +651,7 @@
   function buildConfigRows(data) {
     var query = configDataQuery();
 
-    function visit(label, value, path, depth, forceVisible) {
+    function visit(label, value, path, depth, forceVisible, parentIsArray) {
       var kind = valueKind(value);
       var hasChildren = value && typeof value === "object";
       var pathText = configPathText(path);
@@ -629,7 +661,7 @@
       var childRows = [];
       if (hasChildren) {
         Object.keys(value).forEach(function (childKey) {
-          childRows = childRows.concat(visit(childKey, value[childKey], path.concat([childKey]), depth + 1, forceVisible || ownMatch));
+          childRows = childRows.concat(visit(childKey, value[childKey], path.concat([childKey]), depth + 1, forceVisible || ownMatch, Array.isArray(value)));
         });
       }
       var childMatch = childRows.length > 0;
@@ -645,7 +677,8 @@
           hasChildren: hasChildren,
           childCount: configChildCount(value),
           expanded: !!expandedConfigPaths[key],
-          modified: !!configModifiedMap[configChangeId(selectedConfigTable, path)]
+          modified: !!configModifiedMap[configChangeId(selectedConfigTable, path)],
+          parentIsArray: !!parentIsArray
         };
         if (hasChildren && (expandedConfigPaths[key] || query)) {
           return [row].concat(childRows);
@@ -657,10 +690,10 @@
 
     var rows = [];
     if (!data || typeof data !== "object") {
-      rows = visit("data", data, [], 0, false);
+      rows = visit("data", data, [], 0, false, false);
     } else {
       Object.keys(data).forEach(function (key) {
-        rows = rows.concat(visit(key, data[key], [key], 0, false));
+        rows = rows.concat(visit(key, data[key], [key], 0, false, Array.isArray(data)));
       });
     }
     return rows;
@@ -683,19 +716,35 @@
   function renderConfigRow(row, index) {
     var indent = Math.min(row.depth, 24);
     var modified = row.modified ? " modified" : "";
+    var actions = renderConfigRowActions(row);
     if (row.hasChildren) {
       return '<div class="config-node virtual-row' + modified + '" style="--depth:' + indent + '" data-config-index="' + index + '">' +
-        '<button class="config-node-head" data-config-path="' + escapeHtml(row.pathKey) + '" type="button">' +
+        '<div class="config-node-head" data-config-path="' + escapeHtml(row.pathKey) + '" role="button" tabindex="0">' +
           '<span class="config-twisty">' + (row.expanded || configDataQuery() ? "▾" : "▸") + '</span>' +
           '<strong title="' + escapeHtml(row.pathText) + '">' + escapeHtml(row.label) + '</strong>' +
           '<em>' + escapeHtml(row.kind) + ' · ' + row.childCount + '</em>' +
-        '</button>' +
+          actions +
+        '</div>' +
       '</div>';
     }
-    return '<label class="config-leaf virtual-row' + modified + '" style="--depth:' + indent + '" data-config-index="' + index + '">' +
+    return '<div class="config-leaf virtual-row' + modified + '" style="--depth:' + indent + '" data-config-index="' + index + '">' +
       '<span title="' + escapeHtml(row.pathText) + '">' + escapeHtml(row.label) + '</span>' +
       renderConfigInput(row.value, row.path, row.kind) +
-    '</label>';
+      actions +
+    '</div>';
+  }
+
+  function renderConfigRowActions(row) {
+    var html = "";
+    if (row.kind === "Array") {
+      html += '<button class="config-array-action" data-config-array-action="add" data-config-path="' + escapeHtml(row.pathKey) + '" data-config-index="' + row.childCount + '" type="button" title="增加数组条目">+</button>';
+    }
+    if (row.parentIsArray && row.path.length) {
+      var parentPath = row.path.slice(0, -1);
+      var itemIndex = Number(row.path[row.path.length - 1]);
+      html += '<button class="config-array-action danger" data-config-array-action="delete" data-config-path="' + escapeHtml(configPathKey(parentPath)) + '" data-config-index="' + escapeHtml(itemIndex) + '" type="button" title="删除数组条目">×</button>';
+    }
+    return '<span class="config-row-actions">' + html + '</span>';
   }
 
   function renderConfigInput(value, path, kind) {
@@ -748,6 +797,15 @@
     current[path[path.length - 1]] = value;
   }
 
+  function setLocalConfigPathValue(path, value) {
+    if (!selectedConfigData) return;
+    if (!path.length) {
+      selectedConfigData.data = value;
+      return;
+    }
+    setLocalConfigValue(path, value);
+  }
+
   async function setGameConfigValue(path, value) {
     if (!selectedConfigTable || !path.length) return;
     var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
@@ -759,13 +817,58 @@
     var response = result.value || result;
     if (response && response.ok) {
       setLocalConfigValue(path, value);
-      updateConfigChange(selectedConfigTable, path, value);
+      var arrayPath = configArrayAncestorPath(selectedConfigData.data, path);
+      var changePath = arrayPath || path;
+      var changeValue = arrayPath ? getLocalConfigValue(selectedConfigData.data, arrayPath) : value;
+      if (arrayPath) clearConfigChangesUnderPath(selectedConfigTable, arrayPath);
+      updateConfigChange(selectedConfigTable, changePath, changeValue);
       setStatus(response.message || "配置已更新", false);
     } else {
       setStatus(response && response.message ? response.message : "配置更新失败", true);
     }
     updateConfigChangesButton();
     renderGameConfig();
+  }
+
+  async function spliceGameConfigArray(path, index, op) {
+    if (!selectedConfigTable) return;
+    var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "spliceGameConfigArray",
+      table: selectedConfigTable,
+      path: path,
+      index: index,
+      op: op
+    }) + ")");
+    var response = result.value || result;
+    if (response && response.ok) {
+      setLocalConfigPathValue(path, response.value);
+      clearConfigChangesUnderPath(selectedConfigTable, path);
+      updateConfigChange(selectedConfigTable, path, response.value);
+      setStatus(response.message || "数组已更新", false);
+    } else {
+      setStatus(response && response.message ? response.message : "数组更新失败", true);
+    }
+    updateConfigChangesButton();
+    renderGameConfig();
+  }
+
+  async function reloadWorkerConfig() {
+    var installed = await ensureInspector();
+    if (!installed.ok) {
+      setStatus("注入失败: " + installed.error, true);
+      return;
+    }
+    var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "reloadWorkerConfig"
+    }) + ")");
+    var response = result.value || result;
+    if (response && response.ok) {
+      selectedConfigData = null;
+      setStatus(response.message || "已重载 Worker 配置", false);
+      await collectSnapshot();
+    } else {
+      setStatus(response && response.message ? response.message : "重载 Worker 配置失败", true);
+    }
   }
 
   function updateConfigChangesButton() {
@@ -794,19 +897,108 @@
       }).join("") || '<div class="empty">没有匹配的配置表</div>';
     }
     var changes = modifiedConfigList();
+    var template = selectedConfigTemplate();
+    var previewRows = template ? template.changes : changes;
     detail.innerHTML = '<div class="config-detail-head">' +
       '<strong>运行时修改</strong>' +
-      '<span>' + changes.length + ' 项</span>' +
+      '<span>' + (template ? "模板 " + template.name + " · " + template.changes.length + " 项" : changes.length + " 项") + '</span>' +
     '</div>' +
-    '<div class="config-changes">' + changes.map(renderConfigChangeRow).join("") + '</div>';
-    if (!changes.length) {
-      detail.innerHTML = '<div class="config-detail-head"><strong>运行时修改</strong><span>0 项</span></div><div class="empty">暂无修改记录</div>';
+    renderConfigTemplateToolbar(changes.length) +
+    '<div class="config-changes">' + previewRows.map(renderConfigChangeRow).join("") + '</div>';
+    if (!previewRows.length) {
+      detail.innerHTML = '<div class="config-detail-head"><strong>运行时修改</strong><span>0 项</span></div>' +
+        renderConfigTemplateToolbar(changes.length) +
+        '<div class="empty">' + (template ? "该模板暂无修改项" : "暂无修改记录") + '</div>';
     }
     updateConfigChangesButton();
   }
 
+  function renderConfigTemplateToolbar(changeCount) {
+    return '<div class="config-template-toolbar">' +
+      '<button id="saveConfigTemplateBtn" type="button" ' + (changeCount ? "" : "disabled") + '>保存当前修改为模板</button>' +
+      '<select id="configTemplateSelect">' +
+        '<option value="">选择模板预览</option>' +
+        configTemplates.map(function (template) {
+          return '<option value="' + escapeHtml(template.id) + '"' + (template.id === selectedConfigTemplateId ? " selected" : "") + '>' + escapeHtml(template.name) + '</option>';
+        }).join("") +
+      '</select>' +
+      '<button id="applyConfigTemplateBtn" type="button" ' + (selectedConfigTemplateId ? "" : "disabled") + '>应用模板</button>' +
+    '</div>';
+  }
+
+  function selectedConfigTemplate() {
+    return configTemplates.find(function (template) {
+      return template.id === selectedConfigTemplateId;
+    }) || null;
+  }
+
+  function saveConfigTemplate() {
+    var changes = modifiedConfigList();
+    if (!changes.length) {
+      setStatus("当前没有可保存的配置修改", true);
+      return;
+    }
+    var name = window.prompt("请输入模板名称", "配置修改模板 " + (configTemplates.length + 1));
+    if (!name) return;
+    var template = {
+      id: "config-template-" + Date.now(),
+      name: name,
+      createdAt: Date.now(),
+      changes: changes.map(function (change) {
+        return {
+          table: change.table,
+          path: change.path.slice(),
+          pathText: change.pathText,
+          original: cloneConfigValue(change.original),
+          current: cloneConfigValue(change.current),
+          time: change.time
+        };
+      })
+    };
+    configTemplates.unshift(template);
+    selectedConfigTemplateId = template.id;
+    setStatus("已保存配置修改模板: " + name, false);
+    renderConfigChanges();
+  }
+
+  async function applyConfigTemplate() {
+    var template = selectedConfigTemplate();
+    if (!template) return;
+    for (var index = 0; index < template.changes.length; index += 1) {
+      var change = template.changes[index];
+      var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+        type: "setGameConfigValue",
+        table: change.table,
+        path: change.path,
+        value: change.current
+      }) + ")");
+      var response = result.value || result;
+      if (!response || !response.ok) {
+        setStatus(response && response.message ? response.message : "应用模板失败", true);
+        return;
+      }
+      if (selectedConfigData && selectedConfigData.table === change.table) {
+        setLocalConfigPathValue(change.path, change.current);
+        updateConfigChange(change.table, change.path, change.current);
+      } else {
+        configModifiedMap[configChangeId(change.table, change.path)] = {
+          id: configChangeId(change.table, change.path),
+          table: change.table,
+          path: change.path.slice(),
+          pathText: change.pathText,
+          original: cloneConfigValue(change.original),
+          current: cloneConfigValue(change.current),
+          time: Date.now()
+        };
+      }
+    }
+    setStatus("已应用配置模板: " + template.name, false);
+    renderConfigChanges();
+  }
+
   function renderConfigChangeRow(change) {
-    return '<article class="config-change-row" data-config-change-id="' + escapeHtml(change.id) + '">' +
+    var changeId = change.id || configChangeId(change.table, change.path || []);
+    return '<article class="config-change-row" data-config-change-id="' + escapeHtml(changeId) + '">' +
       '<header>' +
         '<strong>' + escapeHtml(change.table) + '</strong>' +
         '<span>' + escapeHtml(change.pathText) + '</span>' +
@@ -1510,6 +1702,7 @@
   $("configTableSearchInput").addEventListener("input", function () {
     renderGameConfig();
   });
+  $("reloadWorkerConfigBtn").addEventListener("click", reloadWorkerConfig);
   $("configDataSearchInput").addEventListener("input", function () {
     configVirtualScrollTop = 0;
     renderGameConfig();
@@ -1566,9 +1759,36 @@
   });
 
   $("configDetail").addEventListener("click", function (event) {
+    if (event.target.closest("#saveConfigTemplateBtn")) {
+      saveConfigTemplate();
+      return;
+    }
+    if (event.target.closest("#applyConfigTemplateBtn")) {
+      applyConfigTemplate();
+      return;
+    }
+    var arrayAction = event.target.closest("[data-config-array-action]");
+    if (arrayAction) {
+      event.preventDefault();
+      event.stopPropagation();
+      spliceGameConfigArray(
+        parseConfigPath(arrayAction.dataset.configPath),
+        Number(arrayAction.dataset.configIndex) || 0,
+        arrayAction.dataset.configArrayAction
+      );
+      return;
+    }
     var changeRow = event.target.closest("[data-config-change-id]");
     if (changeRow) {
       var change = configModifiedMap[changeRow.dataset.configChangeId];
+      if (!change) {
+        var template = selectedConfigTemplate();
+        if (template) {
+          change = template.changes.find(function (item) {
+            return configChangeId(item.table, item.path || []) === changeRow.dataset.configChangeId;
+          });
+        }
+      }
       if (!change) return;
       showingConfigChanges = false;
       selectedConfigTable = change.table;
@@ -1602,6 +1822,12 @@
   }, true);
 
   $("configDetail").addEventListener("change", function (event) {
+    var templateSelect = event.target.closest("#configTemplateSelect");
+    if (templateSelect) {
+      selectedConfigTemplateId = templateSelect.value || null;
+      renderConfigChanges();
+      return;
+    }
     var input = event.target.closest("input[data-config-path]");
     if (!input) return;
     setGameConfigValue(parseConfigPath(input.dataset.configPath), configInputValue(input));
@@ -1635,6 +1861,20 @@
     }) + ")");
     await collectSnapshot();
     renderNodes();
+  }
+
+  async function outputSelectedNodeToConsole() {
+    if (!selectedNodePath) return;
+    var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "outputNodeToConsole",
+      path: selectedNodePath
+    }) + ")");
+    var response = result.value || result;
+    if (response && response.ok) {
+      setStatus(response.message || "已输出节点到控制台", false);
+    } else {
+      setStatus(response && response.message ? response.message : "输出节点到控制台失败", true);
+    }
   }
 
   async function setTimeScale(value) {
@@ -1689,6 +1929,11 @@
   });
 
   $("nodeDetail").addEventListener("click", function (event) {
+    var consoleButton = event.target.closest("button[data-node-action='console']");
+    if (consoleButton) {
+      outputSelectedNodeToConsole();
+      return;
+    }
     var button = event.target.closest("button[data-node-property][data-node-boolean]");
     if (!button) return;
     setSelectedNodeProperty(button.dataset.nodeProperty, button.dataset.nodeBoolean !== "true");

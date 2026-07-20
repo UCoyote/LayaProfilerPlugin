@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.1.20";
+    var profilerVersion = "0.1.24";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -948,6 +948,15 @@
       return { target: null, key: null, value: current };
     }
 
+    function getLocalValueAtPath(data, path) {
+      var current = data;
+      for (var index = 0; index < path.length; index += 1) {
+        if (!current || typeof current !== "object") return undefined;
+        current = current[path[index]];
+      }
+      return current;
+    }
+
     function collectRuntimeState(Laya) {
       var stateCandidates = {};
       [
@@ -1466,6 +1475,17 @@
         state.logs = [];
         return { ok: true, message: "控制台日志已清除" };
       }
+      if (name && name.type === "reloadWorkerConfig") {
+        try {
+          if (typeof window.RELOAD_WORKER_CONFIG !== "function") {
+            return { ok: false, message: "window.RELOAD_WORKER_CONFIG 不存在" };
+          }
+          window.RELOAD_WORKER_CONFIG();
+          return { ok: true, message: "已调用 window.RELOAD_WORKER_CONFIG()" };
+        } catch (error) {
+          return { ok: false, message: error.message || String(error) };
+        }
+      }
       if (!Laya) return { ok: false, message: "未检测到 Laya 运行时" };
       try {
         if (name === "toggleStat") {
@@ -1510,6 +1530,13 @@
           if (!node) return { ok: false, message: "未找到节点: " + name.path };
           node.visible = !!name.visible;
           return { ok: true, message: (node.name || typeName(node)) + " visible = " + node.visible };
+        }
+        if (name && name.type === "outputNodeToConsole") {
+          var consoleNode = findNodeByPath(name.path);
+          if (!consoleNode) return { ok: false, message: "未找到节点: " + name.path };
+          window.$layaProfilerNode = consoleNode;
+          console.log("输出的节点数据", consoleNode);
+          return { ok: true, message: "已输出节点到控制台: " + (consoleNode.name || typeName(consoleNode)) };
         }
         if (name && name.type === "setNodeProperty") {
           var targetNode = findNodeByPath(name.path);
@@ -1570,6 +1597,31 @@
             ok: true,
             message: name.table + ".data." + path.join(".") + " = " + JSON.stringify(name.value),
             value: cloneGameConfigData(target.target[target.key], 4)
+          };
+        }
+        if (name && name.type === "spliceGameConfigArray") {
+          var arrayTable = getGameConfigTable(name.table);
+          if (!arrayTable) return { ok: false, message: "未找到配置表: " + name.table };
+          var arrayData = arrayTable.data;
+          if (!arrayData || typeof arrayData !== "object") return { ok: false, message: name.table + ".data 不存在" };
+          var arrayPath = Array.isArray(name.path) ? name.path : [];
+          var arrayValue = arrayPath.length ? getLocalValueAtPath(arrayData, arrayPath) : arrayData;
+          if (!Array.isArray(arrayValue)) return { ok: false, message: "目标不是数组: " + arrayPath.join(".") };
+          var op = String(name.op || "");
+          var index = Math.max(0, Math.min(arrayValue.length, safeNumber(name.index, arrayValue.length)));
+          if (op === "add") {
+            var source = arrayValue.length ? arrayValue[Math.max(0, index - 1)] : null;
+            arrayValue.splice(index, 0, cloneGameConfigData(source, 12));
+          } else if (op === "delete") {
+            if (!arrayValue.length) return { ok: false, message: "数组已为空" };
+            arrayValue.splice(Math.max(0, Math.min(arrayValue.length - 1, index)), 1);
+          } else {
+            return { ok: false, message: "未知数组操作: " + op };
+          }
+          return {
+            ok: true,
+            message: name.table + ".data." + arrayPath.join(".") + " 数组已更新",
+            value: cloneGameConfigData(arrayValue, 12)
           };
         }
         return { ok: false, message: "未知命令: " + name };

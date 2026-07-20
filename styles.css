@@ -24,6 +24,7 @@ body {
   width: 100%;
   height: 100%;
   margin: 0;
+  overflow-x: auto;
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
@@ -715,6 +716,10 @@ button.inspector-toggle:hover {
   grid-template-columns: minmax(140px, 1fr) auto;
 }
 
+.config-toolbar.table-toolbar {
+  grid-template-columns: minmax(120px, 1fr) auto;
+}
+
 .config-toolbar input {
   min-width: 0;
   height: 28px;
@@ -852,7 +857,7 @@ button.inspector-toggle:hover {
 .config-node-head,
 .config-leaf {
   display: grid;
-  grid-template-columns: 20px minmax(140px, 1fr) minmax(120px, 220px);
+  grid-template-columns: 20px minmax(140px, 1fr) minmax(120px, 220px) minmax(34px, auto);
   align-items: center;
   height: 32px;
   min-height: 32px;
@@ -893,9 +898,35 @@ button.inspector-toggle:hover {
 }
 
 .config-leaf {
-  grid-template-columns: minmax(150px, 1fr) minmax(160px, 280px);
+  grid-template-columns: minmax(150px, 1fr) minmax(160px, 280px) minmax(34px, auto);
   gap: 10px;
   padding-right: 10px;
+}
+
+.config-row-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 34px;
+}
+
+.config-array-action {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  border-color: rgba(43, 213, 196, 0.42);
+  border-radius: 4px;
+  background: rgba(43, 213, 196, 0.08);
+  color: #2bd5c4;
+  padding: 0;
+}
+
+.config-array-action.danger {
+  border-color: rgba(255, 107, 122, 0.42);
+  background: rgba(255, 107, 122, 0.08);
+  color: var(--error);
 }
 
 .config-node.modified .config-node-head,
@@ -979,6 +1010,31 @@ button.inspector-toggle:hover {
   background: #101923;
   padding: 10px;
   white-space: pre-wrap;
+}
+
+.config-template-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #20252e;
+}
+
+.config-template-toolbar button {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.config-template-toolbar select {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #171d26;
+  color: var(--text);
+  padding: 0 8px;
 }
 
 .dev-actions {
@@ -1878,40 +1934,6 @@ canvas {
 }
 
 @media (max-width: 900px) {
-  .app-shell {
-    min-width: 0;
-  }
-
-  .topbar {
-    align-items: stretch;
-    flex-direction: column;
-    height: auto;
-    padding: 8px;
-  }
-
-  .app-shell {
-    grid-template-rows: auto auto 38px minmax(0, 1fr) auto 26px;
-  }
-
-  .toolbar {
-    width: 100%;
-  }
-
-  .author-info {
-    justify-content: flex-start;
-    min-width: 0;
-  }
-
-  .search,
-  .search input {
-    flex: 1;
-    width: 100%;
-  }
-
-  .metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .split {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(240px, 45%) 1fr;
