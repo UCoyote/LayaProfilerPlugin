@@ -10,11 +10,15 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark"></span>
+          <img class="brand-icon" src="icons/icon-32.png" alt="" />
           <div>
             <strong>Laya Profiler</strong>
             <span id="runtimeLabel">等待连接</span>
           </div>
+        </div>
+        <div class="author-info">
+          <span>Author: UCoyote</span>
+          <span>Email: 501202461@qq.com</span>
         </div>
         <div class="toolbar">
           <label class="search">
@@ -54,7 +58,7 @@
 
       <nav class="tabs" aria-label="功能面板">
         <button class="tab active" data-tab="nodes" type="button">节点层级</button>
-        <button class="tab" data-tab="config" type="button">配置参数</button>
+        <button class="tab" data-tab="config" type="button">游戏配置</button>
         <button class="tab" data-tab="dev" type="button">开发面板</button>
         <button class="tab" data-tab="resources" type="button">资源管理</button>
         <button class="tab" data-tab="gpu" type="button">GPU 内存</button>
@@ -69,17 +73,45 @@
           <div class="split">
             <div class="pane">
               <div class="pane-title">Stage 节点树</div>
+              <div class="node-toolbar">
+                <input id="nodeSearchInput" type="search" placeholder="过滤节点" title="输入关键字过滤 Stage 节点树" />
+                <button id="nodePauseBtn" type="button" title="暂停或恢复游戏">⏸</button>
+                <label title="设置 Laya.timer.scale">
+                  <span>TimeScale</span>
+                  <input id="nodeTimeScaleInput" type="number" step="0.1" value="1" />
+                </label>
+                <button id="refreshNodesBtn" type="button" title="刷新场景层级">↻</button>
+                <button id="expandAllNodesBtn" type="button" title="展开所有节点">⤢</button>
+                <button id="collapseAllNodesBtn" type="button" title="折叠所有节点">⤡</button>
+                <button id="nodeHighlightBtn" type="button" title="开启选中框标记">▣</button>
+              </div>
               <div id="nodeTree" class="tree empty">暂无节点数据</div>
             </div>
             <div class="pane">
               <div class="pane-title">选中节点</div>
-              <pre id="nodeDetail" class="detail">选择左侧节点查看属性</pre>
+              <div id="nodeDetail" class="detail">选择左侧节点查看属性</div>
             </div>
           </div>
         </section>
 
         <section id="configPanel" class="panel">
-          <div id="configGrid" class="kv-grid"></div>
+          <div class="split config-split">
+            <div class="pane">
+              <div class="pane-title">配置表</div>
+              <div class="config-toolbar">
+                <input id="configTableSearchInput" type="search" placeholder="搜索配置表" title="按配置表名称搜索" />
+              </div>
+              <div id="configList" class="config-list"></div>
+            </div>
+            <div class="pane">
+              <div class="pane-title">配置数据</div>
+              <div class="config-toolbar detail-toolbar">
+                <input id="configDataSearchInput" type="search" placeholder="搜索字段 / 路径 / 值" title="按 data 路径和值搜索" />
+                <button id="configChangesBtn" type="button">修改列表</button>
+              </div>
+              <div id="configDetail" class="config-detail">选择左侧配置表查看 data 数据</div>
+            </div>
+          </div>
         </section>
 
         <section id="devPanel" class="panel">

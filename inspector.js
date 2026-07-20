@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.1.5";
+    var profilerVersion = "0.1.15";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -17,6 +17,7 @@
       lastWebGLDrawCalls: 0,
       consoleHooked: false,
       webglHooked: false,
+      highlightLooping: false,
       statVisible: false
     };
 
@@ -24,6 +25,13 @@
       if (window.Laya) return window.Laya;
       if (window.laya && window.laya.Laya) return window.laya.Laya;
       return null;
+    }
+
+    function layaRuntimeVersion(Laya) {
+      try {
+        if (window.LayaEnv && window.LayaEnv.version) return window.LayaEnv.version;
+      } catch (error) {}
+      return Laya && (Laya.version || Laya.VERSION) || "";
     }
 
     function typeName(value) {
@@ -201,23 +209,35 @@
 
     function walkNode(node, depth, path, seen, counters) {
       if (!node || seen.has(node) || depth > 32) return null;
+      if (node.__layaProfilerOverlay) return null;
       seen.add(node);
       counters.count += 1;
       var children = getChildren(node);
       var item = {
         id: node.$_GID || node._id || node.id || path,
         path: path,
-        name: node.name || typeName(node),
+        name: node.$owner && node.$owner.name ? node.$owner.name : node.name || typeName(node),
+        nodeName: node.name || "",
+        ownerName: node.$owner && node.$owner.name ? node.$owner.name : "",
         type: typeName(node),
         visible: node.visible !== false,
         active: node.active !== false && node.destroyed !== true,
+        mouseEnabled: node.mouseEnabled !== false,
+        mouseThrough: node.mouseThrough === true,
         x: round(node.x, 2),
         y: round(node.y, 2),
         width: round(node.width, 2),
         height: round(node.height, 2),
+        pivotX: round(node.pivotX || 0, 2),
+        pivotY: round(node.pivotY || 0, 2),
+        skewX: round(node.skewX || 0, 2),
+        skewY: round(node.skewY || 0, 2),
+        rotation: round(node.rotation || 0, 2),
         scaleX: round(node.scaleX == null ? 1 : node.scaleX, 3),
         scaleY: round(node.scaleY == null ? 1 : node.scaleY, 3),
         alpha: round(node.alpha == null ? 1 : node.alpha, 3),
+        zOrder: round(node.zOrder || 0, 0),
+        destroyed: node.destroyed === true,
         childCount: children.length,
         children: []
       };
@@ -774,21 +794,102 @@
       };
     }
 
-    function collectConfig(Laya) {
-      var stage = Laya && Laya.stage;
+    function gameConfigRoot() {
+      try {
+        return window.config && typeof window.config === "object" ? window.config : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function configDataCount(data) {
+      if (!data || typeof data !== "object") return 0;
+      try {
+        if (Array.isArray(data)) return data.length;
+        return Object.keys(data).length;
+      } catch (error) {
+        return 0;
+      }
+    }
+
+    function cloneGameConfigData(value, depth, seen) {
+      if (value == null) return value;
+      var valueType = typeof value;
+      if (valueType === "number" || valueType === "boolean" || valueType === "string") return value;
+      if (valueType === "undefined") return "[Undefined]";
+      if (valueType === "function") return "[Function " + (value.name || "anonymous") + "]";
+      if (!seen) seen = new WeakSet();
+      if (seen.has(value)) return "[Circular]";
+      if (depth <= 0) return "[" + typeName(value) + "]";
+      seen.add(value);
+      if (Array.isArray(value)) {
+        return value.map(function (item) {
+          return cloneGameConfigData(item, depth - 1, seen);
+        });
+      }
+      var output = {};
+      Object.keys(value).forEach(function (key) {
+        try {
+          output[key] = cloneGameConfigData(value[key], depth - 1, seen);
+        } catch (error) {
+          output[key] = "[Unreadable]";
+        }
+      });
+      return output;
+    }
+
+    function collectConfig() {
+      var root = gameConfigRoot();
+      if (!root) {
+        return {
+          detected: false,
+          rootName: "config",
+          tables: []
+        };
+      }
+      var tables = [];
+      Object.keys(root).forEach(function (key) {
+        if (!/Tbs$/i.test(key)) return;
+        var table = null;
+        var data = null;
+        try {
+          table = root[key];
+          data = table && table.data;
+        } catch (error) {}
+        tables.push({
+          name: key,
+          type: typeName(table),
+          hasData: !!data && typeof data === "object",
+          count: configDataCount(data)
+        });
+      });
       return {
-        "Laya 版本": Laya && (Laya.version || Laya.VERSION) || "未检测到",
-        "渲染模式": Laya && Laya.Render ? typeName(Laya.Render) : "Unknown",
-        "Stage 尺寸": stage ? stage.width + " x " + stage.height : "-",
-        "Stage 缩放": stage ? stage.scaleMode || "-" : "-",
-        "屏幕方向": stage ? stage.screenMode || "-" : "-",
-        "背景颜色": stage ? stage.bgColor || "-" : "-",
-        "帧率模式": stage ? stage.frameRate || "-" : "-",
-        "Canvas 数量": document.querySelectorAll("canvas").length,
-        "设备像素比": window.devicePixelRatio || 1,
-        "页面地址": location.href,
-        "Config": compact(Laya && Laya.Config ? Laya.Config : {}, 2)
+        detected: true,
+        rootName: "config",
+        tables: tables
       };
+    }
+
+    function getGameConfigTable(name) {
+      var root = gameConfigRoot();
+      if (!root || !name || !/Tbs$/i.test(String(name))) return null;
+      try {
+        return root[name] || null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function gameConfigValueAtPath(data, path, createMissing) {
+      var current = data;
+      for (var index = 0; index < path.length; index += 1) {
+        if (!current || typeof current !== "object") return null;
+        var key = path[index];
+        if (index === path.length - 1) return { target: current, key: key, value: current[key] };
+        if (current[key] == null && createMissing) current[key] = {};
+        current = current[key];
+      }
+      return { target: null, key: null, value: current };
     }
 
     function collectRuntimeState(Laya) {
@@ -827,6 +928,409 @@
       return stateCandidates;
     }
 
+    function ensureHighlightOverlay() {
+      var overlay = document.getElementById("__layaProfilerNodeHighlight");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "__layaProfilerNodeHighlight";
+        overlay.style.cssText = "position:fixed;display:none;pointer-events:none;z-index:2147483647;border:2px solid #ff2f3f;box-shadow:0 0 0 1px rgba(255,47,63,.25),0 0 10px rgba(255,47,63,.35);box-sizing:border-box;";
+        document.documentElement.appendChild(overlay);
+      }
+      return overlay;
+    }
+
+    function ensureStageHighlightOverlay(Laya) {
+      if (!Laya || !Laya.stage || typeof Laya.Sprite !== "function") return null;
+      var overlay = window.__LayaProfilerStageHighlight;
+      if (!overlay || overlay.destroyed) {
+        overlay = new Laya.Sprite();
+        overlay.name = "__LayaProfilerNodeHighlight";
+        overlay.__layaProfilerOverlay = true;
+        overlay.mouseEnabled = false;
+        overlay.mouseThrough = true;
+        overlay.zOrder = 2147483647;
+        window.__LayaProfilerStageHighlight = overlay;
+      }
+      if (overlay.parent !== Laya.stage && typeof Laya.stage.addChild === "function") {
+        Laya.stage.addChild(overlay);
+      }
+      try {
+        if (typeof Laya.stage.setChildIndex === "function") {
+          Laya.stage.setChildIndex(overlay, Math.max(0, Laya.stage.numChildren - 1));
+        }
+      } catch (error) {}
+      return overlay;
+    }
+
+    function hideStageHighlightOverlay() {
+      var overlay = window.__LayaProfilerStageHighlight;
+      if (!overlay) return;
+      overlay.visible = false;
+      try {
+        if (overlay.graphics && typeof overlay.graphics.clear === "function") overlay.graphics.clear();
+      } catch (error) {}
+    }
+
+    function isCanvasElement(value) {
+      return value && value.nodeType === 1 && String(value.tagName).toLowerCase() === "canvas";
+    }
+
+    function unwrapCanvas(value) {
+      if (isCanvasElement(value)) return value;
+      if (!value || typeof value !== "object") return null;
+      return isCanvasElement(value.source) ? value.source :
+        isCanvasElement(value.canvas) ? value.canvas :
+        isCanvasElement(value._source) ? value._source :
+        isCanvasElement(value._canvas) ? value._canvas : null;
+    }
+
+    function findLayaCanvas(Laya) {
+      var candidates = [];
+      function add(value) {
+        var canvas = unwrapCanvas(value);
+        if (canvas && candidates.indexOf(canvas) === -1) candidates.push(canvas);
+      }
+
+      if (Laya) {
+        add(Laya.Render && Laya.Render.canvas);
+        add(Laya.Render && Laya.Render._mainCanvas);
+        add(Laya.Render && Laya.Render._context && Laya.Render._context.canvas);
+        add(Laya.Browser && Laya.Browser.canvas);
+        add(Laya.stage && Laya.stage.canvas);
+      }
+
+      Array.prototype.forEach.call(document.querySelectorAll("canvas"), add);
+      for (var index = 0; index < candidates.length; index += 1) {
+        if (candidates[index].isConnected !== false) return candidates[index];
+      }
+      return candidates[0] || null;
+    }
+
+    function readMatrix(value) {
+      if (!value || typeof value !== "object") return null;
+      var a = safeNumber(value.a, NaN);
+      var b = safeNumber(value.b, 0);
+      var c = safeNumber(value.c, 0);
+      var d = safeNumber(value.d, NaN);
+      if (!Number.isFinite(a) || !Number.isFinite(d) || (!a && !d)) return null;
+      return {
+        a: a,
+        b: b,
+        c: c,
+        d: d,
+        tx: safeNumber(value.tx, 0),
+        ty: safeNumber(value.ty, 0)
+      };
+    }
+
+    function readCssMatrix(element) {
+      if (!element || !window.getComputedStyle) return null;
+      var transform = "";
+      try {
+        transform = window.getComputedStyle(element).transform || "";
+      } catch (error) {
+        transform = "";
+      }
+      if (!transform || transform === "none") return null;
+      var match = transform.match(/^matrix\(([^)]+)\)$/);
+      if (!match) return null;
+      var parts = match[1].split(",").map(function (part) {
+        return Number(part.trim());
+      });
+      if (parts.length !== 6 || parts.some(function (part) { return !Number.isFinite(part); })) return null;
+      return { a: parts[0], b: parts[1], c: parts[2], d: parts[3], tx: parts[4], ty: parts[5] };
+    }
+
+    function closeEnough(first, second) {
+      return Math.abs(first - second) < 0.75;
+    }
+
+    function stagePointToClient(point, map) {
+      return {
+        x: map.left + point.x * map.a + point.y * map.c,
+        y: map.top + point.x * map.b + point.y * map.d
+      };
+    }
+
+    function stageClientMap(stage, canvas, rect) {
+      var stageWidth = stage && stage.width ? stage.width : rect.width;
+      var stageHeight = stage && stage.height ? stage.height : rect.height;
+      var matrix = readMatrix(stage && (stage._canvasTransform || stage.canvasTransform));
+      if (matrix) {
+        var cssMatrix = readCssMatrix(canvas);
+        var cssHasStageOffsetX = cssMatrix && closeEnough(cssMatrix.tx, matrix.tx);
+        var cssHasStageOffsetY = cssMatrix && closeEnough(cssMatrix.ty, matrix.ty);
+        var rectHasStageOffsetX = closeEnough(rect.left, matrix.tx);
+        var rectHasStageOffsetY = closeEnough(rect.top, matrix.ty);
+        return {
+          left: rect.left + (cssHasStageOffsetX || rectHasStageOffsetX ? 0 : matrix.tx),
+          top: rect.top + (cssHasStageOffsetY || rectHasStageOffsetY ? 0 : matrix.ty),
+          a: matrix.a,
+          b: matrix.b,
+          c: matrix.c,
+          d: matrix.d
+        };
+      }
+      return {
+        left: rect.left,
+        top: rect.top,
+        a: rect.width / Math.max(stageWidth, 1),
+        b: 0,
+        c: 0,
+        d: rect.height / Math.max(stageHeight, 1)
+      };
+    }
+
+    function nodeParent(node) {
+      if (!node || typeof node !== "object") return null;
+      return node.parent || node._parent || node.displayParent || node._displayParent || null;
+    }
+
+    function nodeMatrix(node) {
+      if (!node) return null;
+      return readMatrix(node.transform || node._transform || node._tf);
+    }
+
+    function nodeOwnNumber(node, fields, fallback) {
+      for (var index = 0; index < fields.length; index += 1) {
+        try {
+          var value = Number(node[fields[index]]);
+          if (Number.isFinite(value)) return value;
+        } catch (error) {}
+      }
+      return fallback;
+    }
+
+    function transformPointByNode(node, point) {
+      var x = point.x;
+      var y = point.y;
+      var matrix = nodeMatrix(node);
+      var nodeX = nodeOwnNumber(node, ["x", "_x"], 0);
+      var nodeY = nodeOwnNumber(node, ["y", "_y"], 0);
+      if (matrix) {
+        return {
+          x: nodeX + x * matrix.a + y * matrix.c + matrix.tx,
+          y: nodeY + x * matrix.b + y * matrix.d + matrix.ty
+        };
+      }
+
+      var pivotX = nodeOwnNumber(node, ["pivotX", "_pivotX"], 0);
+      var pivotY = nodeOwnNumber(node, ["pivotY", "_pivotY"], 0);
+      var scaleX = nodeOwnNumber(node, ["scaleX", "_scaleX"], 1);
+      var scaleY = nodeOwnNumber(node, ["scaleY", "_scaleY"], 1);
+      var rotation = nodeOwnNumber(node, ["rotation", "_rotation"], 0) * Math.PI / 180;
+      var skewX = nodeOwnNumber(node, ["skewX", "_skewX"], 0) * Math.PI / 180;
+      var skewY = nodeOwnNumber(node, ["skewY", "_skewY"], 0) * Math.PI / 180;
+      var localX = x - pivotX;
+      var localY = y - pivotY;
+      var a = scaleX * Math.cos(rotation + skewY);
+      var b = scaleX * Math.sin(rotation + skewY);
+      var c = -scaleY * Math.sin(rotation - skewX);
+      var d = scaleY * Math.cos(rotation - skewX);
+      return {
+        x: nodeX + localX * a + localY * c,
+        y: nodeY + localX * b + localY * d
+      };
+    }
+
+    function manualLocalToStagePoint(node, x, y) {
+      var point = { x: x, y: y };
+      var current = node;
+      var Laya = findLaya();
+      var stage = Laya && Laya.stage;
+      var guard = 0;
+      while (current && guard < 80) {
+        if (current === stage) break;
+        point = transformPointByNode(current, point);
+        current = nodeParent(current);
+        guard += 1;
+      }
+      return point;
+    }
+
+    function createLayaPoint(Laya, x, y) {
+      try {
+        if (Laya && typeof Laya.Point === "function") return new Laya.Point(x, y);
+      } catch (error) {}
+      return { x: x, y: y };
+    }
+
+    function localToStagePoint(node, x, y, Laya) {
+      var manualPoint = manualLocalToStagePoint(node, x, y);
+      var point = createLayaPoint(Laya, x, y);
+      try {
+        if (typeof node.localToGlobal === "function") {
+          var globalPoint = node.localToGlobal(point);
+          if (globalPoint && Number.isFinite(Number(globalPoint.x)) && Number.isFinite(Number(globalPoint.y))) {
+            var ownOnlyX = nodeOwnNumber(node, ["x", "_x"], 0) + x;
+            var ownOnlyY = nodeOwnNumber(node, ["y", "_y"], 0) + y;
+            var parent = nodeParent(node);
+            var looksOwnOnly = parent &&
+              closeEnough(globalPoint.x, ownOnlyX) &&
+              closeEnough(globalPoint.y, ownOnlyY) &&
+              (!closeEnough(manualPoint.x, ownOnlyX) || !closeEnough(manualPoint.y, ownOnlyY));
+            if (!looksOwnOnly) {
+              return {
+                x: safeNumber(globalPoint.x, manualPoint.x),
+                y: safeNumber(globalPoint.y, manualPoint.y)
+              };
+            }
+          }
+        }
+      } catch (error) {}
+      return manualPoint;
+    }
+
+    function nodeLocalSize(node) {
+      if (!node) return null;
+      var width = safeNumber(node.width, 0);
+      var height = safeNumber(node.height, 0);
+      var localX = 0;
+      var localY = 0;
+      if ((!width || !height) && typeof node.getBounds === "function") {
+        try {
+          var bounds = node.getBounds();
+          localX = safeNumber(bounds && bounds.x, 0);
+          localY = safeNumber(bounds && bounds.y, 0);
+          width = width || safeNumber(bounds && bounds.width, 0);
+          height = height || safeNumber(bounds && bounds.height, 0);
+        } catch (error) {}
+      }
+      if (!width || !height) return null;
+      return { x: localX, y: localY, width: width, height: height };
+    }
+
+    function nodeStageBounds(node) {
+      var size = nodeLocalSize(node);
+      if (!size) return null;
+      var Laya = findLaya();
+      var corners = [
+        localToStagePoint(node, size.x, size.y, Laya),
+        localToStagePoint(node, size.x + size.width, size.y, Laya),
+        localToStagePoint(node, size.x + size.width, size.y + size.height, Laya),
+        localToStagePoint(node, size.x, size.y + size.height, Laya)
+      ];
+      var left = Math.min(corners[0].x, corners[1].x, corners[2].x, corners[3].x);
+      var right = Math.max(corners[0].x, corners[1].x, corners[2].x, corners[3].x);
+      var top = Math.min(corners[0].y, corners[1].y, corners[2].y, corners[3].y);
+      var bottom = Math.max(corners[0].y, corners[1].y, corners[2].y, corners[3].y);
+      return {
+        left: left,
+        top: top,
+        width: right - left,
+        height: bottom - top
+      };
+    }
+
+    function nodeGlobalBounds(node) {
+      var size = nodeLocalSize(node);
+      if (!size) return null;
+      var Laya = findLaya();
+      var canvas = findLayaCanvas(Laya);
+      var rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: innerWidth, height: innerHeight };
+      var map = stageClientMap(Laya && Laya.stage, canvas, rect);
+      var corners = [
+        localToStagePoint(node, size.x, size.y, Laya),
+        localToStagePoint(node, size.x + size.width, size.y, Laya),
+        localToStagePoint(node, size.x + size.width, size.y + size.height, Laya),
+        localToStagePoint(node, size.x, size.y + size.height, Laya)
+      ].map(function (point) {
+        return stagePointToClient(point, map);
+      });
+      var left = Math.min(corners[0].x, corners[1].x, corners[2].x, corners[3].x);
+      var right = Math.max(corners[0].x, corners[1].x, corners[2].x, corners[3].x);
+      var top = Math.min(corners[0].y, corners[1].y, corners[2].y, corners[3].y);
+      var bottom = Math.max(corners[0].y, corners[1].y, corners[2].y, corners[3].y);
+      return {
+        left: left,
+        top: top,
+        width: right - left,
+        height: bottom - top
+      };
+    }
+
+    function drawStageHighlight(Laya, node) {
+      var overlay = ensureStageHighlightOverlay(Laya);
+      var bounds = nodeStageBounds(node);
+      if (!overlay || !bounds || !bounds.width || !bounds.height || !overlay.graphics) return false;
+      try {
+        overlay.visible = true;
+        if (typeof overlay.pos === "function") {
+          overlay.pos(bounds.left, bounds.top);
+        } else {
+          overlay.x = bounds.left;
+          overlay.y = bounds.top;
+        }
+        overlay.zOrder = 2147483647;
+        if (typeof overlay.graphics.clear === "function") overlay.graphics.clear();
+        if (typeof overlay.graphics.drawRect === "function") {
+          overlay.graphics.drawRect(0, 0, Math.max(1, bounds.width), Math.max(1, bounds.height), null, "#ff2f3f", 2);
+        }
+        return true;
+      } catch (error) {
+        hideStageHighlightOverlay();
+        return false;
+      }
+    }
+
+    function updateHighlightOverlay() {
+      state.highlightLooping = false;
+      var highlight = window.__LayaProfilerHighlight;
+      if (!highlight || !highlight.enabled || !highlight.path) {
+        ensureHighlightOverlay().style.display = "none";
+        hideStageHighlightOverlay();
+        return;
+      }
+      var Laya = findLaya();
+      var node = findNodeByPath(highlight.path);
+      if (!node || node.visible === false) {
+        ensureHighlightOverlay().style.display = "none";
+        hideStageHighlightOverlay();
+        return;
+      }
+      if (drawStageHighlight(Laya, node)) {
+        ensureHighlightOverlay().style.display = "none";
+        startHighlightOverlayLoop();
+        return;
+      }
+      var overlay = ensureHighlightOverlay();
+      var bounds = nodeGlobalBounds(node);
+      if (!bounds) {
+        overlay.style.display = "none";
+        hideStageHighlightOverlay();
+        return;
+      }
+      hideStageHighlightOverlay();
+      overlay.style.display = "block";
+      overlay.style.left = bounds.left + "px";
+      overlay.style.top = bounds.top + "px";
+      overlay.style.width = Math.max(1, bounds.width) + "px";
+      overlay.style.height = Math.max(1, bounds.height) + "px";
+      startHighlightOverlayLoop();
+    }
+
+    function startHighlightOverlayLoop() {
+      if (state.highlightLooping) return;
+      state.highlightLooping = true;
+      requestAnimationFrame(updateHighlightOverlay);
+    }
+
+    function findNodeByPath(path) {
+      var Laya = findLaya();
+      if (!Laya || !Laya.stage || !path) return null;
+      if (path === "0") return Laya.stage;
+      var parts = String(path).split(".");
+      var node = Laya.stage;
+      for (var index = 1; index < parts.length; index += 1) {
+        var childIndex = Number(parts[index]);
+        if (!Number.isFinite(childIndex)) return null;
+        var children = getChildren(node);
+        node = children[childIndex];
+        if (!node) return null;
+      }
+      return node;
+    }
+
     function gpuSummary(resources) {
       var buckets = {};
       var total = 0;
@@ -834,7 +1338,22 @@
         var bytes = safeNumber(resource.bytes, 0);
         total += bytes;
         var bucket = resource.type || "Unknown";
-        buckets[bucket] = (buckets[bucket] || 0) + bytes;
+        if (!buckets[bucket]) {
+          buckets[bucket] = {
+            name: bucket,
+            bytes: 0,
+            resources: []
+          };
+        }
+        buckets[bucket].bytes += bytes;
+        buckets[bucket].resources.push({
+          name: resource.name || "-",
+          url: resource.url || "",
+          source: resource.source || "",
+          type: resource.type || "Unknown",
+          size: resource.size || "-",
+          bytes: bytes
+        });
       });
       return {
         total: total,
@@ -842,7 +1361,11 @@
         unknown: 0,
         count: resources.length,
         buckets: Object.keys(buckets).sort().map(function (name) {
-          return { name: name, bytes: buckets[name] };
+          var bucket = buckets[name];
+          bucket.resources.sort(function (a, b) {
+            return safeNumber(b.bytes, 0) - safeNumber(a.bytes, 0);
+          });
+          return bucket;
         })
       };
     }
@@ -857,7 +1380,7 @@
         ok: true,
         time: Date.now(),
         detected: !!Laya,
-        runtimeLabel: Laya ? "LayaAir " + (Laya.version || Laya.VERSION || "") : "未检测到 Laya",
+        runtimeLabel: Laya ? "LayaAir " + layaRuntimeVersion(Laya) : "未检测到 Laya",
         nodes: tree,
         config: collectConfig(Laya),
         resources: resources,
@@ -908,6 +1431,86 @@
         if (name === "resumeGame") {
           if (Laya.timer) Laya.timer.scale = 1;
           return { ok: true, message: "Laya.timer.scale = 1" };
+        }
+        if (name && name.type === "setTimeScale") {
+          var scale = safeNumber(name.value, 1);
+          if (Laya.timer) Laya.timer.scale = scale;
+          return { ok: true, message: "Laya.timer.scale = " + scale };
+        }
+        if (name && name.type === "highlightNode") {
+          window.__LayaProfilerHighlight = {
+            enabled: !!name.enabled,
+            path: name.path || ""
+          };
+          startHighlightOverlayLoop();
+          return { ok: true, message: window.__LayaProfilerHighlight.enabled ? "已开启节点标记" : "已关闭节点标记" };
+        }
+        if (name && name.type === "setNodeVisible") {
+          var node = findNodeByPath(name.path);
+          if (!node) return { ok: false, message: "未找到节点: " + name.path };
+          node.visible = !!name.visible;
+          return { ok: true, message: (node.name || typeName(node)) + " visible = " + node.visible };
+        }
+        if (name && name.type === "setNodeProperty") {
+          var targetNode = findNodeByPath(name.path);
+          if (!targetNode) return { ok: false, message: "未找到节点: " + name.path };
+          var property = String(name.property || "");
+          var editable = {
+            name: "string",
+            active: "boolean",
+            visible: "boolean",
+            mouseEnabled: "boolean",
+            mouseThrough: "boolean",
+            x: "number",
+            y: "number",
+            width: "number",
+            height: "number",
+            pivotX: "number",
+            pivotY: "number",
+            scaleX: "number",
+            scaleY: "number",
+            skewX: "number",
+            skewY: "number",
+            rotation: "number",
+            alpha: "number",
+            zOrder: "number"
+          };
+          if (!editable[property]) return { ok: false, message: "不可编辑属性: " + property };
+          var nextValue = name.value;
+          if (editable[property] === "number") nextValue = safeNumber(nextValue, targetNode[property] || 0);
+          if (editable[property] === "boolean") nextValue = !!nextValue;
+          if (editable[property] === "string") nextValue = String(nextValue == null ? "" : nextValue);
+          targetNode[property] = nextValue;
+          if (property === "name" && targetNode.$owner) targetNode.$owner.name = nextValue;
+          return { ok: true, message: property + " = " + nextValue };
+        }
+        if (name && name.type === "getGameConfigData") {
+          var configTable = getGameConfigTable(name.table);
+          if (!configTable) return { ok: false, message: "未找到配置表: " + name.table };
+          var tableData = configTable.data;
+          if (!tableData || typeof tableData !== "object") return { ok: false, message: name.table + ".data 不存在" };
+          return {
+            ok: true,
+            table: name.table,
+            count: configDataCount(tableData),
+            data: cloneGameConfigData(tableData, 12)
+          };
+        }
+        if (name && name.type === "setGameConfigValue") {
+          var table = getGameConfigTable(name.table);
+          if (!table) return { ok: false, message: "未找到配置表: " + name.table };
+          var data = table.data;
+          if (!data || typeof data !== "object") return { ok: false, message: name.table + ".data 不存在" };
+          var path = Array.isArray(name.path) ? name.path : [];
+          if (!path.length) return { ok: false, message: "配置路径为空" };
+          var target = gameConfigValueAtPath(data, path, false);
+          if (!target || !target.target) return { ok: false, message: "未找到配置字段: " + path.join(".") };
+          target.target[target.key] = name.value;
+          return {
+            ok: true,
+            message: name.table + ".data." + path.join(".") + " = " + JSON.stringify(name.value),
+            value: cloneGameConfigData(target.target[target.key], 4)
+          };
         }
         return { ok: false, message: "未知命令: " + name };
       } catch (error) {

@@ -3,7 +3,10 @@
   var activeTab = "nodes";
   var paused = false;
   var selectedNodePath = null;
+  var expandedNodePaths = { "0": true };
   var nodeIndex = {};
+  var nodeHighlightEnabled = false;
+  var lastNonZeroTimeScale = 1;
   var monitorHistory = [];
   var imagePreview = document.getElementById("imagePreview");
   var resourceSort = { key: "bytes", dir: "desc" };
@@ -11,6 +14,17 @@
   var selectedResourceSnapshotId = null;
   var compareSnapshotIds = [];
   var resourceCompareResult = null;
+  var selectedConfigTable = null;
+  var selectedConfigData = null;
+  var configDataLoading = false;
+  var expandedConfigPaths = { "[]": true };
+  var configInitialDataByTable = {};
+  var configModifiedMap = {};
+  var showingConfigChanges = false;
+  var selectedConfigRows = [];
+  var configVirtualScrollTop = 0;
+  var configVirtualRowHeight = 32;
+  var expandedGpuBuckets = {};
 
   var tabs = Array.from(document.querySelectorAll(".tab"));
   var panels = {
@@ -127,8 +141,8 @@
     $("metricNode").textContent = formatNumber(snapshot.monitor.node, 0);
     setStatus(snapshot.detected ? "已连接 Laya 运行时" : "当前页面未检测到 Laya", !snapshot.detected);
 
-    if (activeTab === "nodes") renderNodes();
-    if (activeTab === "config") renderKeyValues("configGrid", snapshot.config);
+    if (activeTab === "nodes" && !isEditingNodeInspector()) renderNodes();
+    if (activeTab === "config" && !isEditingGameConfig()) renderGameConfig();
     if (activeTab === "resources" && !options.skipResourcePanel) renderResources();
     if (activeTab === "gpu") renderGpu();
     if (activeTab === "state") renderKeyValues("stateGrid", snapshot.state);
@@ -141,16 +155,40 @@
     return $("searchInput").value.trim().toLowerCase();
   }
 
+  function getNodeQuery() {
+    var input = $("nodeSearchInput");
+    return input ? input.value.trim().toLowerCase() : "";
+  }
+
   function matchesQuery(value) {
     var query = getQuery();
     if (!query) return true;
     return JSON.stringify(value).toLowerCase().includes(query);
   }
 
+  function matchesNodeQuery(value) {
+    var query = getNodeQuery();
+    if (!query) return true;
+    return JSON.stringify(value).toLowerCase().includes(query);
+  }
+
+  function isEditingNodeInspector() {
+    var active = document.activeElement;
+    return active && $("nodeDetail") && $("nodeDetail").contains(active) && active.matches("input");
+  }
+
+  function isEditingGameConfig() {
+    var active = document.activeElement;
+    return active && $("configDetail") && $("configDetail").contains(active) && active.matches("input");
+  }
+
   function flattenNodes(node, depth, rows) {
     if (!node) return;
     nodeIndex[node.path] = node;
-    if (matchesQuery(node)) rows.push({ node: node, depth: depth });
+    if (matchesNodeQuery(node)) rows.push({ node: node, depth: depth });
+    var query = getNodeQuery();
+    var expanded = expandedNodePaths[node.path] || query;
+    if (!expanded) return;
     (node.children || []).forEach(function (child) {
       flattenNodes(child, depth + 1, rows);
     });
@@ -164,21 +202,105 @@
       $("nodeDetail").textContent = "页面中存在 Laya 后会显示节点属性。";
       return;
     }
+    updateNodeToolbar();
     var rows = [];
     flattenNodes(snapshot.nodes, 0, rows);
     tree.innerHTML = rows.map(function (row) {
       var node = row.node;
       var selected = selectedNodePath === node.path ? " selected" : "";
       var hidden = node.visible ? "" : " muted";
-      return '<button class="tree-row depth-' + Math.min(row.depth, 32) + selected + hidden + '" data-path="' + escapeHtml(node.path) + '" type="button">' +
-        '<span class="twisty">' + (node.childCount ? "▸" : "") + '</span>' +
+      var expanded = expandedNodePaths[node.path] || getNodeQuery();
+      var visibleButton = selected
+        ? '<button class="tree-visible" data-node-action="visible" type="button" title="' + (node.visible ? "隐藏节点" : "显示节点") + '">' + (node.visible ? "◉" : "○") + '</button>'
+        : '';
+      return '<div class="tree-row depth-' + Math.min(row.depth, 32) + selected + hidden + '" data-path="' + escapeHtml(node.path) + '">' +
+        '<button class="tree-toggle" data-node-action="toggle" type="button" title="' + (expanded ? "折叠节点" : "展开节点") + '">' + (node.childCount ? (expanded ? "▾" : "▸") : "") + '</button>' +
+        '<button class="tree-select" data-node-action="select" type="button" title="选择节点">' +
         '<span class="node-name">' + escapeHtml(node.name) + '</span>' +
         '<span class="node-type">' + escapeHtml(node.type) + '</span>' +
-        '</button>';
+        '</button>' +
+        visibleButton +
+        '</div>';
     }).join("") || '<div class="empty">没有匹配的节点</div>';
 
     var detail = selectedNodePath && nodeIndex[selectedNodePath] ? nodeIndex[selectedNodePath] : snapshot.nodes;
-    $("nodeDetail").textContent = pretty(detail);
+    $("nodeDetail").innerHTML = renderNodeInspector(detail);
+  }
+
+  function updateNodeToolbar() {
+    var scale = snapshot && snapshot.state && snapshot.state.Stage ? Number(snapshot.state.Stage.timerScale) : NaN;
+    if (Number.isFinite(scale)) {
+      if (scale > 0) lastNonZeroTimeScale = scale;
+      if (document.activeElement !== $("nodeTimeScaleInput")) $("nodeTimeScaleInput").value = String(scale);
+      $("nodePauseBtn").textContent = scale === 0 ? "▶" : "⏸";
+      $("nodePauseBtn").title = scale === 0 ? "恢复游戏" : "暂停游戏";
+    }
+    $("nodeHighlightBtn").classList.toggle("active", nodeHighlightEnabled);
+    $("nodeHighlightBtn").title = nodeHighlightEnabled ? "关闭选中框标记" : "开启选中框标记";
+  }
+
+  function renderNodeInspector(node) {
+    if (!node) return '<div class="empty">选择左侧节点查看属性</div>';
+    return '<div class="node-inspector">' +
+      '<section class="inspector-section">' +
+        '<header><strong>节点信息</strong><span>NodeInfo</span></header>' +
+        inspectorField("名称", "name", node.name, "text") +
+        inspectorToggleRow("激活", "active", node.active, "可见", "visible", node.visible) +
+        '<button class="inspector-console" type="button" disabled>输出到控制台</button>' +
+      '</section>' +
+      '<section class="inspector-section">' +
+        '<header><strong>基础</strong><span>Node2D</span></header>' +
+        inspectorPair("位置", "X", "x", node.x, "Y", "y", node.y) +
+        inspectorPair("尺寸", "X", "width", node.width, "Y", "height", node.height) +
+        inspectorPair("锚点", "X", "pivotX", node.pivotX, "Y", "pivotY", node.pivotY) +
+        inspectorPair("缩放", "X", "scaleX", node.scaleX, "Y", "scaleY", node.scaleY) +
+        inspectorPair("倾斜", "X", "skewX", node.skewX, "Y", "skewY", node.skewY) +
+        inspectorField("旋转", "rotation", node.rotation, "number") +
+        inspectorToggle("可见", "visible", node.visible) +
+        inspectorRange("透明度", "alpha", node.alpha) +
+        inspectorToggle("鼠标触摸启用", "mouseEnabled", node.mouseEnabled) +
+        inspectorToggle("鼠标触摸穿透", "mouseThrough", node.mouseThrough) +
+        inspectorField("zOrder", "zOrder", node.zOrder, "number") +
+      '</section>' +
+      '<section class="inspector-section">' +
+        '<header><strong>调试</strong><span>' + escapeHtml(node.type) + '</span></header>' +
+        inspectorReadOnlyField("路径", node.path) +
+        inspectorReadOnlyField("子节点", node.childCount) +
+        inspectorReadOnlyField("销毁", node.destroyed ? "true" : "false") +
+      '</section>' +
+    '</div>';
+  }
+
+  function inspectorField(label, property, value, type) {
+    var inputType = type === "text" ? "text" : "number";
+    return '<label class="inspector-field"><span>' + escapeHtml(label) + '</span><input data-node-property="' + escapeHtml(property) + '" type="' + inputType + '" value="' + escapeHtml(value) + '"></label>';
+  }
+
+  function inspectorReadOnlyField(label, value) {
+    return '<label class="inspector-field readonly"><span>' + escapeHtml(label) + '</span><input value="' + escapeHtml(value) + '" readonly></label>';
+  }
+
+  function inspectorPair(label, aLabel, aProperty, aValue, bLabel, bProperty, bValue) {
+    return '<div class="inspector-pair"><span>' + escapeHtml(label) + '</span>' +
+      '<label><em>' + escapeHtml(aLabel) + '</em><input data-node-property="' + escapeHtml(aProperty) + '" type="number" value="' + escapeHtml(aValue) + '"></label>' +
+      '<label><em>' + escapeHtml(bLabel) + '</em><input data-node-property="' + escapeHtml(bProperty) + '" type="number" value="' + escapeHtml(bValue) + '"></label>' +
+      '</div>';
+  }
+
+  function inspectorToggle(label, property, value) {
+    return '<button class="inspector-toggle" data-node-property="' + escapeHtml(property) + '" data-node-boolean="' + (value ? "true" : "false") + '" type="button"><span>' + escapeHtml(label) + '</span><i class="' + (value ? "on" : "") + '">' + (value ? "✓" : "") + '</i></button>';
+  }
+
+  function inspectorToggleRow(leftLabel, leftProperty, leftValue, rightLabel, rightProperty, rightValue) {
+    return '<div class="inspector-toggle-row">' +
+      inspectorToggle(leftLabel, leftProperty, leftValue) +
+      inspectorToggle(rightLabel, rightProperty, rightValue) +
+      '</div>';
+  }
+
+  function inspectorRange(label, property, value) {
+    var percent = Math.max(0, Math.min(100, Number(value) * 100 || 0));
+    return '<div class="inspector-range"><span>' + escapeHtml(label) + '</span><input data-node-property="' + escapeHtml(property) + '" type="range" min="0" max="1" step="0.01" value="' + escapeHtml(value) + '"><input data-node-property="' + escapeHtml(property) + '" type="number" min="0" max="1" step="0.01" value="' + escapeHtml(value) + '"></div>';
   }
 
   function renderKeyValues(targetId, data) {
@@ -191,6 +313,402 @@
         '<pre>' + escapeHtml(text) + '</pre>' +
       '</article>';
     }).join("") || '<div class="empty">暂无数据</div>';
+  }
+
+  function configTables() {
+    return snapshot && snapshot.config && Array.isArray(snapshot.config.tables) ? snapshot.config.tables : [];
+  }
+
+  function configPathKey(path) {
+    return JSON.stringify(path || []);
+  }
+
+  function valueKind(value) {
+    if (Array.isArray(value)) return "Array";
+    if (value === null) return "null";
+    return typeof value === "object" ? "Object" : typeof value;
+  }
+
+  function configChildCount(value) {
+    if (!value || typeof value !== "object") return 0;
+    return Object.keys(value).length;
+  }
+
+  function configTableQuery() {
+    var input = $("configTableSearchInput");
+    var local = input ? input.value.trim().toLowerCase() : "";
+    return local || getQuery();
+  }
+
+  function configDataQuery() {
+    var input = $("configDataSearchInput");
+    return input ? input.value.trim().toLowerCase() : "";
+  }
+
+  function configValueText(value) {
+    if (typeof value === "string") return value;
+    if (value == null || typeof value !== "object") return String(value);
+    return pretty(value);
+  }
+
+  function cloneConfigValue(value) {
+    if (value == null || typeof value !== "object") return value;
+    if (Array.isArray(value)) {
+      return value.map(cloneConfigValue);
+    }
+    var output = {};
+    Object.keys(value).forEach(function (key) {
+      output[key] = cloneConfigValue(value[key]);
+    });
+    return output;
+  }
+
+  function configValuesEqual(left, right) {
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch (error) {
+      return left === right;
+    }
+  }
+
+  function getLocalConfigValue(data, path) {
+    var current = data;
+    for (var index = 0; index < path.length; index += 1) {
+      if (!current || typeof current !== "object") return undefined;
+      current = current[path[index]];
+    }
+    return current;
+  }
+
+  function configChangeId(table, path) {
+    return table + "::" + configPathKey(path);
+  }
+
+  function configPathText(path) {
+    return path.map(function (part) {
+      return String(part);
+    }).join(".");
+  }
+
+  function updateConfigChange(table, path, currentValue) {
+    var initial = configInitialDataByTable[table];
+    if (!initial) return;
+    var originalValue = getLocalConfigValue(initial, path);
+    var id = configChangeId(table, path);
+    if (configValuesEqual(originalValue, currentValue)) {
+      delete configModifiedMap[id];
+      return;
+    }
+    configModifiedMap[id] = {
+      id: id,
+      table: table,
+      path: path.slice(),
+      pathText: configPathText(path),
+      original: cloneConfigValue(originalValue),
+      current: cloneConfigValue(currentValue),
+      time: Date.now()
+    };
+  }
+
+  function modifiedConfigList() {
+    return Object.keys(configModifiedMap).map(function (key) {
+      return configModifiedMap[key];
+    }).sort(function (a, b) {
+      return b.time - a.time;
+    });
+  }
+
+  function renderGameConfig() {
+    var config = snapshot && snapshot.config;
+    updateConfigChangesButton();
+    if (showingConfigChanges) {
+      renderConfigChanges();
+      return;
+    }
+    var tables = configTables().filter(function (table) {
+      var query = configTableQuery();
+      return !query || table.name.toLowerCase().includes(query);
+    });
+    var list = $("configList");
+    var detail = $("configDetail");
+    if (!config || !config.detected) {
+      selectedConfigTable = null;
+      selectedConfigData = null;
+      list.innerHTML = '<div class="empty">未检测到全局 config 对象</div>';
+      detail.innerHTML = '<div class="empty">页面存在 window.config 后会显示配置表。</div>';
+      return;
+    }
+    if (!configTables().length) {
+      selectedConfigTable = null;
+      selectedConfigData = null;
+      list.innerHTML = '<div class="empty">未找到后缀为 Tbs 的配置表</div>';
+      detail.innerHTML = '<div class="empty">会遍历 window.config 中名称以 Tbs 结尾的成员。</div>';
+      return;
+    }
+    if (!selectedConfigTable || !configTables().some(function (table) { return table.name === selectedConfigTable; })) {
+      selectedConfigTable = configTables()[0].name;
+      selectedConfigData = null;
+      expandedConfigPaths = { "[]": true };
+    }
+    list.innerHTML = tables.map(function (table) {
+      var selected = table.name === selectedConfigTable ? " selected" : "";
+      var muted = table.hasData ? "" : " muted";
+      return '<button class="config-row' + selected + muted + '" data-config-table="' + escapeHtml(table.name) + '" type="button">' +
+        '<span class="config-name">' + escapeHtml(table.name) + '</span>' +
+        '<span class="config-meta">' + escapeHtml(table.count) + ' 条 · ' + escapeHtml(table.type) + '</span>' +
+      '</button>';
+    }).join("") || '<div class="empty">没有匹配的配置表</div>';
+
+    if (!selectedConfigData || selectedConfigData.table !== selectedConfigTable) {
+      detail.innerHTML = '<div class="empty">正在读取 ' + escapeHtml(selectedConfigTable) + '.data...</div>';
+      loadSelectedConfigData(selectedConfigTable);
+      return;
+    }
+
+    var selectedMeta = configTables().find(function (table) {
+      return table.name === selectedConfigTable;
+    });
+    selectedConfigRows = buildConfigRows(selectedConfigData.data);
+    detail.innerHTML = '<div class="config-detail-head">' +
+      '<strong>' + escapeHtml(selectedConfigTable) + '</strong>' +
+      '<span>' + escapeHtml(selectedConfigRows.length) + ' 行 · ' + escapeHtml(selectedMeta ? selectedMeta.count : selectedConfigData.count) + ' 条</span>' +
+    '</div>' +
+    '<div id="configVirtualList" class="config-data-virtual">' +
+      '<div class="config-virtual-spacer" style="height:' + (selectedConfigRows.length * configVirtualRowHeight) + 'px">' +
+        '<div id="configVirtualRows" class="config-virtual-rows"></div>' +
+      '</div>' +
+    '</div>';
+    var viewport = $("configVirtualList");
+    if (viewport) {
+      viewport.scrollTop = Math.min(configVirtualScrollTop, Math.max(0, selectedConfigRows.length * configVirtualRowHeight - viewport.clientHeight));
+    }
+    renderConfigVirtualRows();
+  }
+
+  async function loadSelectedConfigData(table) {
+    if (!table || configDataLoading) return;
+    configDataLoading = true;
+    var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "getGameConfigData",
+      table: table
+    }) + ")");
+    configDataLoading = false;
+    var value = result.value || result;
+    if (value && value.ok && value.table === selectedConfigTable) {
+      selectedConfigData = value;
+      if (!configInitialDataByTable[value.table]) {
+        configInitialDataByTable[value.table] = cloneConfigValue(value.data);
+      }
+    } else {
+      selectedConfigData = {
+        ok: false,
+        table: table,
+        data: value && value.message ? value.message : "读取失败"
+      };
+    }
+    renderGameConfig();
+  }
+
+  function buildConfigRows(data) {
+    var query = configDataQuery();
+
+    function visit(label, value, path, depth, forceVisible) {
+      var kind = valueKind(value);
+      var hasChildren = value && typeof value === "object";
+      var pathText = configPathText(path);
+      var ownText = (pathText + " " + label + " " + kind + (hasChildren ? "" : " " + configValueText(value))).toLowerCase();
+      var ownMatch = !query || ownText.includes(query);
+      var key = configPathKey(path);
+      var childRows = [];
+      if (hasChildren) {
+        Object.keys(value).forEach(function (childKey) {
+          childRows = childRows.concat(visit(childKey, value[childKey], path.concat([childKey]), depth + 1, forceVisible || ownMatch));
+        });
+      }
+      var childMatch = childRows.length > 0;
+      if (!query || ownMatch || childMatch || forceVisible) {
+        var row = {
+          label: label,
+          value: value,
+          kind: kind,
+          path: path,
+          pathKey: key,
+          pathText: pathText,
+          depth: depth,
+          hasChildren: hasChildren,
+          childCount: configChildCount(value),
+          expanded: !!expandedConfigPaths[key],
+          modified: !!configModifiedMap[configChangeId(selectedConfigTable, path)]
+        };
+        if (hasChildren && (expandedConfigPaths[key] || query)) {
+          return [row].concat(childRows);
+        }
+        return [row];
+      }
+      return [];
+    }
+
+    var rows = [];
+    if (!data || typeof data !== "object") {
+      rows = visit("data", data, [], 0, false);
+    } else {
+      Object.keys(data).forEach(function (key) {
+        rows = rows.concat(visit(key, data[key], [key], 0, false));
+      });
+    }
+    return rows;
+  }
+
+  function renderConfigVirtualRows() {
+    var viewport = $("configVirtualList");
+    var target = $("configVirtualRows");
+    if (!viewport || !target) return;
+    configVirtualScrollTop = viewport.scrollTop;
+    var height = viewport.clientHeight || 420;
+    var start = Math.max(0, Math.floor(configVirtualScrollTop / configVirtualRowHeight) - 8);
+    var end = Math.min(selectedConfigRows.length, Math.ceil((configVirtualScrollTop + height) / configVirtualRowHeight) + 8);
+    target.style.transform = "translateY(" + (start * configVirtualRowHeight) + "px)";
+    target.innerHTML = selectedConfigRows.slice(start, end).map(function (row, offset) {
+      return renderConfigRow(row, start + offset);
+    }).join("") || '<div class="empty">没有匹配的配置数据</div>';
+  }
+
+  function renderConfigRow(row, index) {
+    var indent = Math.min(row.depth, 24);
+    var modified = row.modified ? " modified" : "";
+    if (row.hasChildren) {
+      return '<div class="config-node virtual-row' + modified + '" style="--depth:' + indent + '" data-config-index="' + index + '">' +
+        '<button class="config-node-head" data-config-path="' + escapeHtml(row.pathKey) + '" type="button">' +
+          '<span class="config-twisty">' + (row.expanded || configDataQuery() ? "▾" : "▸") + '</span>' +
+          '<strong title="' + escapeHtml(row.pathText) + '">' + escapeHtml(row.label) + '</strong>' +
+          '<em>' + escapeHtml(row.kind) + ' · ' + row.childCount + '</em>' +
+        '</button>' +
+      '</div>';
+    }
+    return '<label class="config-leaf virtual-row' + modified + '" style="--depth:' + indent + '" data-config-index="' + index + '">' +
+      '<span title="' + escapeHtml(row.pathText) + '">' + escapeHtml(row.label) + '</span>' +
+      renderConfigInput(row.value, row.path, row.kind) +
+    '</label>';
+  }
+
+  function renderConfigInput(value, path, kind) {
+    var pathValue = escapeHtml(configPathKey(path));
+    if (kind === "boolean") {
+      return '<button class="config-value-toggle" data-config-path="' + pathValue + '" data-config-kind="boolean" data-config-value="' + (value ? "true" : "false") + '" type="button">' + (value ? "true" : "false") + '</button>';
+    }
+    if (kind === "number") {
+      return '<input data-config-path="' + pathValue + '" data-config-kind="number" type="number" value="' + escapeHtml(value) + '">';
+    }
+    if (kind === "string") {
+      return '<input data-config-path="' + pathValue + '" data-config-kind="string" type="text" value="' + escapeHtml(value) + '">';
+    }
+    return '<input data-config-path="' + pathValue + '" data-config-kind="json" type="text" value="' + escapeHtml(pretty(value)) + '">';
+  }
+
+  function parseConfigPath(value) {
+    try {
+      var path = JSON.parse(value || "[]");
+      return Array.isArray(path) ? path : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function configInputValue(input) {
+    var kind = input.dataset.configKind;
+    if (kind === "number") {
+      var number = Number(input.value);
+      return Number.isFinite(number) ? number : 0;
+    }
+    if (kind === "boolean") return input.dataset.configValue === "true";
+    if (kind === "json") {
+      try {
+        return JSON.parse(input.value);
+      } catch (error) {
+        return input.value;
+      }
+    }
+    return input.value;
+  }
+
+  function setLocalConfigValue(path, value) {
+    if (!selectedConfigData || !selectedConfigData.data || !path.length) return;
+    var current = selectedConfigData.data;
+    for (var index = 0; index < path.length - 1; index += 1) {
+      current = current && current[path[index]];
+      if (!current || typeof current !== "object") return;
+    }
+    current[path[path.length - 1]] = value;
+  }
+
+  async function setGameConfigValue(path, value) {
+    if (!selectedConfigTable || !path.length) return;
+    var result = await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "setGameConfigValue",
+      table: selectedConfigTable,
+      path: path,
+      value: value
+    }) + ")");
+    var response = result.value || result;
+    if (response && response.ok) {
+      setLocalConfigValue(path, value);
+      updateConfigChange(selectedConfigTable, path, value);
+      setStatus(response.message || "配置已更新", false);
+    } else {
+      setStatus(response && response.message ? response.message : "配置更新失败", true);
+    }
+    updateConfigChangesButton();
+    renderGameConfig();
+  }
+
+  function updateConfigChangesButton() {
+    var button = $("configChangesBtn");
+    if (!button) return;
+    var count = modifiedConfigList().length;
+    button.textContent = showingConfigChanges ? "返回数据" : "修改列表" + (count ? " (" + count + ")" : "");
+    button.classList.toggle("active", showingConfigChanges || count > 0);
+  }
+
+  function renderConfigChanges() {
+    var list = $("configList");
+    var detail = $("configDetail");
+    var config = snapshot && snapshot.config;
+    if (list && config && config.detected) {
+      var query = configTableQuery();
+      var tables = configTables().filter(function (table) {
+        return !query || table.name.toLowerCase().includes(query);
+      });
+      list.innerHTML = tables.map(function (table) {
+        var selected = table.name === selectedConfigTable ? " selected" : "";
+        return '<button class="config-row' + selected + '" data-config-table="' + escapeHtml(table.name) + '" type="button">' +
+          '<span class="config-name">' + escapeHtml(table.name) + '</span>' +
+          '<span class="config-meta">' + escapeHtml(table.count) + ' 条 · ' + escapeHtml(table.type) + '</span>' +
+        '</button>';
+      }).join("") || '<div class="empty">没有匹配的配置表</div>';
+    }
+    var changes = modifiedConfigList();
+    detail.innerHTML = '<div class="config-detail-head">' +
+      '<strong>运行时修改</strong>' +
+      '<span>' + changes.length + ' 项</span>' +
+    '</div>' +
+    '<div class="config-changes">' + changes.map(renderConfigChangeRow).join("") + '</div>';
+    if (!changes.length) {
+      detail.innerHTML = '<div class="config-detail-head"><strong>运行时修改</strong><span>0 项</span></div><div class="empty">暂无修改记录</div>';
+    }
+    updateConfigChangesButton();
+  }
+
+  function renderConfigChangeRow(change) {
+    return '<article class="config-change-row" data-config-change-id="' + escapeHtml(change.id) + '">' +
+      '<header>' +
+        '<strong>' + escapeHtml(change.table) + '</strong>' +
+        '<span>' + escapeHtml(change.pathText) + '</span>' +
+      '</header>' +
+      '<div class="config-change-values">' +
+        '<pre>' + escapeHtml(configValueText(change.original)) + '</pre>' +
+        '<pre>' + escapeHtml(configValueText(change.current)) + '</pre>' +
+      '</div>' +
+    '</article>';
   }
 
   function renderResources() {
@@ -527,11 +1045,36 @@
     var total = Math.max(snapshot.gpu.total, 1);
     $("gpuBuckets").innerHTML = (snapshot.gpu.buckets || []).map(function (bucket) {
       var width = Math.min(100, Math.max(2, Math.round(bucket.bytes / total * 100)));
-      return '<article class="bucket">' +
-        '<div><strong>' + escapeHtml(bucket.name) + '</strong><span>' + formatBytes(bucket.bytes) + '</span></div>' +
+      var expanded = !!expandedGpuBuckets[bucket.name];
+      var resources = bucket.resources || [];
+      return '<article class="bucket' + (expanded ? " expanded" : "") + '">' +
+        '<button class="bucket-head" data-gpu-bucket="' + escapeHtml(bucket.name) + '" type="button" title="展开资源归因">' +
+          '<span class="bucket-twisty">' + (expanded ? "▾" : "▸") + '</span>' +
+          '<strong>' + escapeHtml(bucket.name) + '</strong>' +
+          '<em>' + resources.length + ' 个资源</em>' +
+          '<span>' + formatBytes(bucket.bytes) + '</span>' +
+        '</button>' +
         '<span class="bar"><i class="w-' + width + '"></i></span>' +
+        (expanded ? renderGpuBucketResources(resources) : "") +
       '</article>';
     }).join("") || '<div class="empty">暂无 GPU 对象</div>';
+  }
+
+  function renderGpuBucketResources(resources) {
+    if (!resources.length) return '<div class="gpu-resource-list"><div class="empty">暂无资源归因</div></div>';
+    return '<div class="gpu-resource-list">' +
+      resources.map(function (resource) {
+        var path = resource.url || resource.source || "-";
+        return '<article class="gpu-resource-item">' +
+          '<div>' +
+            '<strong title="' + escapeHtml(resource.name || "-") + '">' + escapeHtml(resource.name || "-") + '</strong>' +
+            '<span title="' + escapeHtml(path) + '">' + escapeHtml(path) + '</span>' +
+          '</div>' +
+          '<em>' + escapeHtml(resource.size || "-") + '</em>' +
+          '<b>' + formatBytes(resource.bytes) + '</b>' +
+        '</article>';
+      }).join("") +
+    '</div>';
   }
 
   function renderFrame() {
@@ -626,11 +1169,38 @@
   $("nodeTree").addEventListener("click", function (event) {
     var row = event.target.closest(".tree-row");
     if (!row) return;
-    selectedNodePath = row.dataset.path;
+    var actionTarget = event.target.closest("[data-node-action]");
+    var action = actionTarget ? actionTarget.dataset.nodeAction : "select";
+    var path = row.dataset.path;
+    if (action === "toggle") {
+      if (!nodeIndex[path] || !nodeIndex[path].childCount) return;
+      expandedNodePaths[path] = !expandedNodePaths[path];
+      renderNodes();
+      return;
+    }
+    if (action === "visible") {
+      var node = nodeIndex[path];
+      if (!node) return;
+      toggleNodeVisible(path, !node.visible);
+      return;
+    }
+    selectedNodePath = path;
+    updateSelectedNodeHighlight();
     renderNodes();
   });
 
   $("searchInput").addEventListener("input", render);
+  $("configTableSearchInput").addEventListener("input", function () {
+    renderGameConfig();
+  });
+  $("configDataSearchInput").addEventListener("input", function () {
+    configVirtualScrollTop = 0;
+    renderGameConfig();
+  });
+  $("configChangesBtn").addEventListener("click", function () {
+    showingConfigChanges = !showingConfigChanges;
+    renderGameConfig();
+  });
   $("refreshBtn").addEventListener("click", collectSnapshot);
   $("pauseBtn").addEventListener("click", function () {
     paused = !paused;
@@ -642,6 +1212,183 @@
   document.querySelector(".dev-actions").addEventListener("click", function (event) {
     var button = event.target.closest("button[data-command]");
     if (button) runCommand(button.dataset.command);
+  });
+
+  $("configList").addEventListener("click", function (event) {
+    var row = event.target.closest("[data-config-table]");
+    if (!row) return;
+    showingConfigChanges = false;
+    selectedConfigTable = row.dataset.configTable;
+    selectedConfigData = null;
+    expandedConfigPaths = { "[]": true };
+    configVirtualScrollTop = 0;
+    renderGameConfig();
+  });
+
+  $("configDetail").addEventListener("click", function (event) {
+    var changeRow = event.target.closest("[data-config-change-id]");
+    if (changeRow) {
+      var change = configModifiedMap[changeRow.dataset.configChangeId];
+      if (!change) return;
+      showingConfigChanges = false;
+      selectedConfigTable = change.table;
+      selectedConfigData = null;
+      expandedConfigPaths = { "[]": true };
+      change.path.slice(0, -1).forEach(function (_, index) {
+        expandedConfigPaths[configPathKey(change.path.slice(0, index + 1))] = true;
+      });
+      $("configDataSearchInput").value = change.pathText;
+      renderGameConfig();
+      return;
+    }
+    var toggle = event.target.closest(".config-value-toggle[data-config-path]");
+    if (toggle) {
+      var boolPath = parseConfigPath(toggle.dataset.configPath);
+      var nextValue = toggle.dataset.configValue !== "true";
+      setGameConfigValue(boolPath, nextValue);
+      return;
+    }
+    var head = event.target.closest(".config-node-head[data-config-path]");
+    if (!head) return;
+    var key = head.dataset.configPath;
+    expandedConfigPaths[key] = !expandedConfigPaths[key];
+    renderGameConfig();
+  });
+
+  $("configDetail").addEventListener("scroll", function (event) {
+    if (event.target && event.target.id === "configVirtualList") {
+      renderConfigVirtualRows();
+    }
+  }, true);
+
+  $("configDetail").addEventListener("change", function (event) {
+    var input = event.target.closest("input[data-config-path]");
+    if (!input) return;
+    setGameConfigValue(parseConfigPath(input.dataset.configPath), configInputValue(input));
+  });
+
+  $("gpuBuckets").addEventListener("click", function (event) {
+    var head = event.target.closest("[data-gpu-bucket]");
+    if (!head) return;
+    var name = head.dataset.gpuBucket;
+    expandedGpuBuckets[name] = !expandedGpuBuckets[name];
+    renderGpu();
+  });
+
+  async function toggleNodeVisible(path, visible) {
+    await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "setNodeVisible",
+      path: path,
+      visible: visible
+    }) + ")");
+    await collectSnapshot();
+    renderNodes();
+  }
+
+  async function setSelectedNodeProperty(property, value) {
+    if (!selectedNodePath || !property) return;
+    await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "setNodeProperty",
+      path: selectedNodePath,
+      property: property,
+      value: value
+    }) + ")");
+    await collectSnapshot();
+    renderNodes();
+  }
+
+  async function setTimeScale(value) {
+    var scale = Number(value);
+    if (!Number.isFinite(scale)) scale = 1;
+    if (scale > 0) lastNonZeroTimeScale = scale;
+    await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "setTimeScale",
+      value: scale
+    }) + ")");
+    await collectSnapshot();
+    updateNodeToolbar();
+  }
+
+  function collectNodePaths(node, paths) {
+    paths = paths || [];
+    if (!node) return paths;
+    paths.push(node.path);
+    (node.children || []).forEach(function (child) {
+      collectNodePaths(child, paths);
+    });
+    return paths;
+  }
+
+  async function updateSelectedNodeHighlight() {
+    await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+      type: "highlightNode",
+      enabled: nodeHighlightEnabled,
+      path: selectedNodePath || ""
+    }) + ")");
+  }
+
+  $("nodeDetail").addEventListener("change", function (event) {
+    var input = event.target.closest("[data-node-property]");
+    if (!input || input.dataset.nodeBoolean) return;
+    setSelectedNodeProperty(input.dataset.nodeProperty, input.value);
+  });
+
+  $("nodeDetail").addEventListener("input", function (event) {
+    var input = event.target.closest('input[type="range"][data-node-property]');
+    if (!input) return;
+    var paired = $("nodeDetail").querySelector('input[type="number"][data-node-property="' + input.dataset.nodeProperty + '"]');
+    if (paired) paired.value = input.value;
+    setSelectedNodeProperty(input.dataset.nodeProperty, input.value);
+  });
+
+  $("nodeDetail").addEventListener("keydown", function (event) {
+    if (event.key !== "Enter") return;
+    var input = event.target.closest("input[data-node-property]");
+    if (!input || input.dataset.nodeBoolean) return;
+    input.blur();
+  });
+
+  $("nodeDetail").addEventListener("click", function (event) {
+    var button = event.target.closest("button[data-node-property][data-node-boolean]");
+    if (!button) return;
+    setSelectedNodeProperty(button.dataset.nodeProperty, button.dataset.nodeBoolean !== "true");
+  });
+
+  $("nodeSearchInput").addEventListener("input", renderNodes);
+
+  $("nodePauseBtn").addEventListener("click", function () {
+    var scale = Number($("nodeTimeScaleInput").value);
+    if (!Number.isFinite(scale)) scale = 1;
+    setTimeScale(scale === 0 ? lastNonZeroTimeScale || 1 : 0);
+  });
+
+  $("nodeTimeScaleInput").addEventListener("change", function () {
+    setTimeScale($("nodeTimeScaleInput").value);
+  });
+
+  $("nodeTimeScaleInput").addEventListener("keydown", function (event) {
+    if (event.key === "Enter") $("nodeTimeScaleInput").blur();
+  });
+
+  $("refreshNodesBtn").addEventListener("click", collectSnapshot);
+
+  $("expandAllNodesBtn").addEventListener("click", function () {
+    expandedNodePaths = {};
+    collectNodePaths(snapshot && snapshot.nodes).forEach(function (path) {
+      expandedNodePaths[path] = true;
+    });
+    renderNodes();
+  });
+
+  $("collapseAllNodesBtn").addEventListener("click", function () {
+    expandedNodePaths = { "0": true };
+    renderNodes();
+  });
+
+  $("nodeHighlightBtn").addEventListener("click", function () {
+    nodeHighlightEnabled = !nodeHighlightEnabled;
+    updateSelectedNodeHighlight();
+    updateNodeToolbar();
   });
 
   $("resourceRows").addEventListener("mouseover", function (event) {
