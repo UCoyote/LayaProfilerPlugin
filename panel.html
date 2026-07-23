@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Laya Profiler</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand-icon" src="icons/icon-32.png" alt="" />
+          <div>
+            <strong>Laya Profiler</strong>
+            <span id="runtimeLabel">等待连接</span>
+          </div>
+        </div>
+        <div class="author-info">
+          <span>Contact: UCoyote</span>
+          <span>Email: 501202461@qq.com</span>
+        </div>
+        <div class="toolbar">
+          <label class="search">
+            <input id="searchInput" type="search" placeholder="搜索节点 / 资源 / 日志" />
+          </label>
+          <button id="pauseBtn" type="button" title="暂停采样">暂停</button>
+          <button id="refreshBtn" type="button" title="立即刷新">刷新</button>
+        </div>
+      </header>
+
+      <section class="metrics" aria-label="监控信息">
+        <article>
+          <span>FPS</span>
+          <strong id="metricFps">--</strong>
+        </article>
+        <article>
+          <span>FrameTime</span>
+          <strong id="metricFrame">--</strong>
+        </article>
+        <article>
+          <span>HeapUsed</span>
+          <strong id="metricHeap">--</strong>
+        </article>
+        <article>
+          <span>GPUMemory</span>
+          <strong id="metricGpu">--</strong>
+        </article>
+        <article>
+          <span>DrawCall</span>
+          <strong id="metricDraw">--</strong>
+        </article>
+        <article>
+          <span>Node</span>
+          <strong id="metricNode">--</strong>
+        </article>
+      </section>
+
+      <nav id="mainTabs" class="tabs main-tabs" aria-label="功能面板">
+        <button class="tab active" data-tab="nodes" type="button" draggable="true">节点层级</button>
+        <button class="tab" data-tab="config" type="button" draggable="true">游戏配置</button>
+        <button class="tab" data-tab="dev" type="button" draggable="true">开发面板</button>
+        <button class="tab" data-tab="resources" type="button" draggable="true">资源管理</button>
+        <button class="tab" data-tab="gpu" type="button" draggable="true">GPU 内存</button>
+        <button class="tab" data-tab="console" type="button" draggable="true">控制台</button>
+        <button class="tab" data-tab="monitor" type="button" draggable="true">监控信息</button>
+      </nav>
+
+      <main id="mainContent" class="content">
+        <section id="nodesPanel" class="panel active">
+          <div class="split">
+            <div class="pane">
+              <div class="pane-title">Stage 节点树</div>
+              <div class="node-toolbar">
+                <input id="nodeSearchInput" type="search" placeholder="过滤节点" title="输入关键字过滤 Stage 节点树" />
+                <button id="nodePauseBtn" type="button" title="暂停或恢复游戏">⏸</button>
+                <label title="设置 Laya.timer.scale">
+                  <span>TimeScale</span>
+                  <input id="nodeTimeScaleInput" type="number" step="0.1" value="1" />
+                </label>
+                <button id="refreshNodesBtn" type="button" title="刷新场景层级">↻</button>
+                <button id="expandAllNodesBtn" type="button" title="展开所有节点">⤢</button>
+                <button id="collapseAllNodesBtn" type="button" title="折叠所有节点">⤡</button>
+                <button id="nodeHighlightBtn" type="button" title="开启选中框标记">▣</button>
+              </div>
+              <div id="nodeTree" class="tree empty">暂无节点数据</div>
+            </div>
+            <div class="pane">
+              <div class="pane-title">选中节点</div>
+              <div id="nodeDetail" class="detail">选择左侧节点查看属性</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="configPanel" class="panel">
+          <div class="split config-split">
+            <div class="pane">
+              <div class="pane-title">配置表</div>
+              <div class="config-toolbar table-toolbar">
+                <input id="configTableSearchInput" type="search" placeholder="搜索配置表" title="按配置表名称搜索" />
+                <button id="reloadWorkerConfigBtn" type="button">重载Worker配置</button>
+              </div>
+              <div id="configList" class="config-list"></div>
+            </div>
+            <div class="pane">
+              <div class="pane-title">配置数据</div>
+              <div class="config-toolbar detail-toolbar">
+                <input id="configDataSearchInput" type="search" placeholder="搜索字段 / 路径 / 值" title="按 data 路径和值搜索" />
+                <button id="configChangesBtn" type="button">修改列表</button>
+              </div>
+              <div id="configDetail" class="config-detail">选择左侧配置表查看 data 数据</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="devPanel" class="panel">
+          <div class="dev-actions">
+            <button data-command="toggleStat" type="button">切换 Stat 面板</button>
+            <button data-command="gc" type="button">触发资源回收</button>
+            <button data-command="pauseGame" type="button">暂停计时器</button>
+            <button data-command="resumeGame" type="button">恢复计时器</button>
+          </div>
+          <pre id="devOutput" class="detail">开发命令会在当前被调试页面中执行。</pre>
+        </section>
+
+        <section id="resourcesPanel" class="panel">
+          <div class="resource-workspace">
+            <aside class="snapshot-sidebar">
+              <div class="snapshot-toolbar">
+                <strong>资源快照</strong>
+                <div class="snapshot-actions">
+                  <button id="takeResourceSnapshotBtn" class="icon-button record-button" type="button" title="创建当前资源快照" aria-label="创建当前资源快照">
+                    <span class="record-dot"></span>
+                  </button>
+                  <button id="compareResourceSnapshotsBtn" class="icon-button" type="button" title="比较选中的两个快照" aria-label="比较选中的两个快照" disabled>⇄</button>
+                </div>
+              </div>
+              <div id="resourceSnapshotList" class="snapshot-list">
+                <div class="empty">暂无快照</div>
+              </div>
+            </aside>
+            <div class="resource-table-panel">
+              <div id="resourceSnapshotTitle" class="resource-snapshot-title">点击“快照”保存当前资源状态</div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>预览</th>
+                      <th class="change-col">
+                        <span class="sortable-head">
+                          变化
+                          <span>
+                            <button class="sort-btn" data-sort-key="changeType" data-sort-dir="asc" type="button" title="变化分类升序">▲</button>
+                            <button class="sort-btn" data-sort-key="changeType" data-sort-dir="desc" type="button" title="变化分类降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>对象</th>
+                      <th>来源</th>
+                      <th>
+                        <span class="sortable-head">
+                          GPU 内存
+                          <span>
+                            <button class="sort-btn" data-sort-key="bytes" data-sort-dir="asc" type="button" title="GPU 内存升序">▲</button>
+                            <button class="sort-btn" data-sort-key="bytes" data-sort-dir="desc" type="button" title="GPU 内存降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>
+                        <span class="sortable-head">
+                          资源类型
+                          <span>
+                            <button class="sort-btn" data-sort-key="type" data-sort-dir="asc" type="button" title="资源类型升序">▲</button>
+                            <button class="sort-btn" data-sort-key="type" data-sort-dir="desc" type="button" title="资源类型降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>
+                        <span class="sortable-head">
+                          尺寸
+                          <span>
+                            <button class="sort-btn" data-sort-key="size" data-sort-dir="asc" type="button" title="尺寸升序">▲</button>
+                            <button class="sort-btn" data-sort-key="size" data-sort-dir="desc" type="button" title="尺寸降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                      <th>
+                        <span class="sortable-head">
+                          引用计数
+                          <span>
+                            <button class="sort-btn" data-sort-key="refCount" data-sort-dir="asc" type="button" title="引用计数升序">▲</button>
+                            <button class="sort-btn" data-sort-key="refCount" data-sort-dir="desc" type="button" title="引用计数降序">▼</button>
+                          </span>
+                        </span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody id="resourceRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="gpuPanel" class="panel">
+          <div class="gpu-summary">
+            <article><span>GPU 总量</span><strong id="gpuTotal">--</strong></article>
+            <article><span>已归因</span><strong id="gpuKnown">--</strong></article>
+            <article><span>未归因</span><strong id="gpuUnknown">--</strong></article>
+            <article><span>对象数</span><strong id="gpuCount">--</strong></article>
+          </div>
+          <div id="gpuBuckets" class="bucket-list"></div>
+        </section>
+
+        <section id="consolePanel" class="panel">
+          <div class="console-toolbar">
+            <div class="console-levels" role="group" aria-label="日志分类">
+              <button class="console-filter active" data-console-level="all" type="button">All</button>
+              <button class="console-filter" data-console-level="log" type="button">Log</button>
+              <button class="console-filter" data-console-level="warn" type="button">Warn</button>
+              <button class="console-filter" data-console-level="error" type="button">Error</button>
+            </div>
+            <input id="consoleSearchInput" type="search" placeholder="搜索控制台日志" />
+            <button id="clearConsoleBtn" type="button">清除</button>
+          </div>
+          <div id="consoleRows" class="console-list"></div>
+        </section>
+
+        <section id="monitorPanel" class="panel">
+          <div id="monitorGrid" class="kv-grid"></div>
+          <canvas id="monitorChart" width="900" height="260"></canvas>
+        </section>
+      </main>
+
+      <section id="bottomDock" class="bottom-dock empty" aria-label="底部停靠区域">
+        <div id="bottomDockResizer" class="bottom-dock-resizer" title="上下拖动调整底部区域高度"></div>
+        <nav id="bottomTabs" class="tabs bottom-tabs" aria-label="底部停靠分页"></nav>
+        <div id="bottomDockContent" class="bottom-dock-content"></div>
+        <div class="bottom-dock-placeholder">拖拽分页到这里停靠</div>
+      </section>
+
+      <footer class="statusbar">
+        <span id="statusText">未采样</span>
+        <span id="lastUpdate">--</span>
+      </footer>
+      <div id="imagePreview" class="image-preview" aria-hidden="true">
+        <img id="imagePreviewImg" alt="" />
+        <div id="imagePreviewMessage" class="image-preview-message"></div>
+        <div class="image-preview-detail">
+          <strong id="imagePreviewName"></strong>
+          <span id="imagePreviewMeta"></span>
+        </div>
+      </div>
+    </div>
+
+    <script src="inspector.js"></script>
+    <script src="panel.js"></script>
+  </body>
+</html>
