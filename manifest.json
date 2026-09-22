@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Laya Profiler",
-  "description": "LayaAir引擎性能分析工具，提供节点树、资源、GPU内存占用、帧统计、控制台的分析。",
-  "version": "0.1.24",
+  "name": "Game Profiler",
+  "description": "LayaAir / Cocos Creator 3.8 引擎性能分析工具，提供节点树、资源、GPU内存占用、帧统计、控制台的分析。",
+  "version": "0.2.0",
   "author": "UCoyote",
   "devtools_page": "devtools.html",
   "icons": {
@@ -12,7 +12,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Laya Profiler     Author:UCoyote   Email: 501202461@qq.com",
+    "default_title": "Game Profiler     Author:UCoyote   Email: 501202461@qq.com",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

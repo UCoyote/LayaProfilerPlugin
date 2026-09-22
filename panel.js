@@ -254,7 +254,11 @@
     $("metricGpu").textContent = formatBytes(snapshot.monitor.gpuMemory);
     $("metricDraw").textContent = formatNumber(snapshot.monitor.drawCall, 0);
     $("metricNode").textContent = formatNumber(snapshot.monitor.node, 0);
-    setStatus(snapshot.detected ? "已连接 Laya 运行时" : "当前页面未检测到 Laya", !snapshot.detected);
+    var connected = !!snapshot.detected;
+    var statusText = "当前页面未检测到 LayaAir / Cocos Creator";
+    if (connected && snapshot.engine === "cocos") statusText = "已连接 Cocos Creator 运行时";
+    else if (connected) statusText = "已连接 Laya 运行时";
+    setStatus(statusText, !connected);
 
     renderPanel(activeMainTab, options);
     if (activeBottomTab && activeBottomTab !== activeMainTab) renderPanel(activeBottomTab, options);
@@ -310,12 +314,25 @@
     });
   }
 
+  function currentEngine() {
+    return snapshot && snapshot.engine ? snapshot.engine : "none";
+  }
+
   function renderNodes() {
     var tree = $("nodeTree");
     nodeIndex = {};
     if (!snapshot.nodes) {
-      tree.innerHTML = '<div class="empty">未检测到 Laya.stage</div>';
-      $("nodeDetail").textContent = "页面中存在 Laya 后会显示节点属性。";
+      var emptyTree = "未检测到 LayaAir / Cocos Creator 运行时";
+      var emptyDetail = "页面中存在 LayaAir 或 Cocos Creator 后会显示节点属性。";
+      if (currentEngine() === "cocos") {
+        emptyTree = "未检测到当前场景";
+        emptyDetail = "页面存在 cc.director.getScene() 后会显示节点属性。";
+      } else if (currentEngine() === "laya") {
+        emptyTree = "未检测到 Laya.stage";
+        emptyDetail = "页面中存在 Laya 后会显示节点属性。";
+      }
+      tree.innerHTML = '<div class="empty">' + emptyTree + '</div>';
+      $("nodeDetail").textContent = emptyDetail;
       return;
     }
     updateNodeToolbar();
@@ -326,8 +343,9 @@
       var selected = selectedNodePath === node.path ? " selected" : "";
       var hidden = node.visible ? "" : " muted";
       var expanded = expandedNodePaths[node.path] || getNodeQuery();
+      var shown = currentEngine() === "cocos" ? node.active : node.visible;
       var visibleButton = selected
-        ? '<button class="tree-visible" data-node-action="visible" type="button" title="' + (node.visible ? "隐藏节点" : "显示节点") + '">' + (node.visible ? "◉" : "○") + '</button>'
+        ? '<button class="tree-visible" data-node-action="visible" type="button" title="' + (shown ? "隐藏节点" : "显示节点") + '">' + (shown ? "◉" : "○") + '</button>'
         : '';
       return '<div class="tree-row depth-' + Math.min(row.depth, 32) + selected + hidden + '" data-path="' + escapeHtml(node.path) + '">' +
         '<button class="tree-toggle" data-node-action="toggle" type="button" title="' + (expanded ? "折叠节点" : "展开节点") + '">' + (node.childCount ? (expanded ? "▾" : "▸") : "") + '</button>' +
@@ -344,7 +362,11 @@
   }
 
   function updateNodeToolbar() {
-    var scale = snapshot && snapshot.state && snapshot.state.Stage ? Number(snapshot.state.Stage.timerScale) : NaN;
+    var scale = snapshot && Number.isFinite(Number(snapshot.timerScale)) ? Number(snapshot.timerScale) : NaN;
+    if (!Number.isFinite(scale) && snapshot && snapshot.state) {
+      if (snapshot.state.Stage) scale = Number(snapshot.state.Stage.timerScale);
+      else if (snapshot.state.Scene) scale = Number(snapshot.state.Scene.timerScale);
+    }
     if (Number.isFinite(scale)) {
       if (scale > 0) lastNonZeroTimeScale = scale;
       if (document.activeElement !== $("nodeTimeScaleInput")) $("nodeTimeScaleInput").value = String(scale);
@@ -357,6 +379,11 @@
 
   function renderNodeInspector(node) {
     if (!node) return '<div class="empty">选择左侧节点查看属性</div>';
+    if (currentEngine() === "cocos") return renderCocosNodeInspector(node);
+    return renderLayaNodeInspector(node);
+  }
+
+  function renderLayaNodeInspector(node) {
     return '<div class="node-inspector">' +
       '<section class="inspector-section">' +
         '<header><strong>节点信息</strong><span>NodeInfo</span></header>' +
@@ -387,6 +414,41 @@
     '</div>';
   }
 
+  function renderCocosNodeInspector(node) {
+    var components = Array.isArray(node.components) && node.components.length ? node.components.join(", ") : "-";
+    return '<div class="node-inspector">' +
+      '<section class="inspector-section">' +
+        '<header><strong>节点信息</strong><span>Node</span></header>' +
+        inspectorField("名称", "name", node.name, "text") +
+        inspectorToggle("激活", "active", node.active) +
+        '<button class="inspector-console" data-node-action="console" type="button">输出到控制台</button>' +
+      '</section>' +
+      '<section class="inspector-section">' +
+        '<header><strong>变换</strong><span>Transform</span></header>' +
+        inspectorTriple("位置", "X", "x", node.x, "Y", "y", node.y, "Z", "z", node.z) +
+        inspectorTriple("缩放", "X", "scaleX", node.scaleX, "Y", "scaleY", node.scaleY, "Z", "scaleZ", node.scaleZ) +
+        inspectorTriple("欧拉角", "X", "eulerX", node.eulerX, "Y", "eulerY", node.eulerY, "Z", "eulerZ", node.eulerZ) +
+        inspectorField("2D 角度", "rotation", node.rotation, "number") +
+      '</section>' +
+      '<section class="inspector-section">' +
+        '<header><strong>UI</strong><span>UITransform</span></header>' +
+        inspectorPair("尺寸", "W", "width", node.width, "H", "height", node.height) +
+        inspectorPair("锚点", "X", "pivotX", node.pivotX, "Y", "pivotY", node.pivotY) +
+        inspectorRange("透明度", "alpha", node.alpha) +
+      '</section>' +
+      '<section class="inspector-section">' +
+        '<header><strong>调试</strong><span>' + escapeHtml(node.type) + '</span></header>' +
+        inspectorReadOnlyField("路径", node.path) +
+        inspectorReadOnlyField("UUID", node.uuid || "-") +
+        inspectorField("Layer", "layer", node.layer, "number") +
+        inspectorField("Sibling", "zOrder", node.zOrder, "number") +
+        inspectorReadOnlyField("组件", components) +
+        inspectorReadOnlyField("子节点", node.childCount) +
+        inspectorReadOnlyField("销毁", node.destroyed ? "true" : "false") +
+      '</section>' +
+    '</div>';
+  }
+
   function inspectorField(label, property, value, type) {
     var inputType = type === "text" ? "text" : "number";
     return '<label class="inspector-field"><span>' + escapeHtml(label) + '</span><input data-node-property="' + escapeHtml(property) + '" type="' + inputType + '" value="' + escapeHtml(value) + '"></label>';
@@ -400,6 +462,14 @@
     return '<div class="inspector-pair"><span>' + escapeHtml(label) + '</span>' +
       '<label><em>' + escapeHtml(aLabel) + '</em><input data-node-property="' + escapeHtml(aProperty) + '" type="number" value="' + escapeHtml(aValue) + '"></label>' +
       '<label><em>' + escapeHtml(bLabel) + '</em><input data-node-property="' + escapeHtml(bProperty) + '" type="number" value="' + escapeHtml(bValue) + '"></label>' +
+      '</div>';
+  }
+
+  function inspectorTriple(label, aLabel, aProperty, aValue, bLabel, bProperty, bValue, cLabel, cProperty, cValue) {
+    return '<div class="inspector-pair inspector-triple"><span>' + escapeHtml(label) + '</span>' +
+      '<label><em>' + escapeHtml(aLabel) + '</em><input data-node-property="' + escapeHtml(aProperty) + '" type="number" value="' + escapeHtml(aValue) + '"></label>' +
+      '<label><em>' + escapeHtml(bLabel) + '</em><input data-node-property="' + escapeHtml(bProperty) + '" type="number" value="' + escapeHtml(bValue) + '"></label>' +
+      '<label><em>' + escapeHtml(cLabel) + '</em><input data-node-property="' + escapeHtml(cProperty) + '" type="number" value="' + escapeHtml(cValue) + '"></label>' +
       '</div>';
   }
 
@@ -1690,7 +1760,8 @@
     if (action === "visible") {
       var node = nodeIndex[path];
       if (!node) return;
-      toggleNodeVisible(path, !node.visible);
+      var nextVisible = currentEngine() === "cocos" ? !node.active : !node.visible;
+      toggleNodeVisible(path, nextVisible);
       return;
     }
     selectedNodePath = path;

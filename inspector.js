@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.1.24";
+    var profilerVersion = "0.2.0";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -27,6 +27,12 @@
       return null;
     }
 
+    function findCocos() {
+      var cc = window.cc || null;
+      if (cc && (cc.director || cc.game || cc.assetManager || cc.ENGINE_VERSION)) return cc;
+      return null;
+    }
+
     function layaRuntimeVersion(Laya) {
       try {
         if (window.Laya && window.Laya.LayaEnv && window.Laya.LayaEnv.version) return window.Laya.LayaEnv.version;
@@ -40,9 +46,68 @@
       return Laya && (Laya.version || Laya.VERSION) || "";
     }
 
+    function cocosRuntimeVersion(cc) {
+      try {
+        if (cc && cc.ENGINE_VERSION) return String(cc.ENGINE_VERSION);
+      } catch (error) {}
+      try {
+        if (window.CocosEngine) return String(window.CocosEngine);
+      } catch (error) {}
+      return "";
+    }
+
+    function isLayaReady(Laya) {
+      return !!(Laya && Laya.stage);
+    }
+
+    function isCocosReady(cc) {
+      try {
+        return !!(cc && cc.director && typeof cc.director.getScene === "function" && cc.director.getScene());
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function detectEngine() {
+      var Laya = findLaya();
+      var cc = findCocos();
+      var layaReady = isLayaReady(Laya);
+      var cocosReady = isCocosReady(cc);
+      if (layaReady && !cocosReady) return { type: "laya", Laya: Laya, cc: null };
+      if (cocosReady && !layaReady) return { type: "cocos", Laya: null, cc: cc };
+      if (layaReady && cocosReady) return { type: "laya", Laya: Laya, cc: cc };
+      if (Laya) return { type: "laya", Laya: Laya, cc: null };
+      if (cc) return { type: "cocos", Laya: null, cc: cc };
+      return { type: "none", Laya: null, cc: null };
+    }
+
+    function getEngineRoot(engine) {
+      engine = engine || detectEngine();
+      if (engine.type === "cocos" && engine.cc && engine.cc.director && typeof engine.cc.director.getScene === "function") {
+        try {
+          return engine.cc.director.getScene();
+        } catch (error) {
+          return null;
+        }
+      }
+      if (engine.Laya) return engine.Laya.stage || null;
+      return null;
+    }
+
+    function engineClassName(value, engine) {
+      try {
+        if (engine && engine.type === "cocos" && engine.cc && engine.cc.js && typeof engine.cc.js.getClassName === "function") {
+          var name = engine.cc.js.getClassName(value);
+          if (name) return name;
+        }
+      } catch (error) {}
+      return typeName(value);
+    }
+
     function typeName(value) {
       if (!value) return "Unknown";
       if (value.__className) return value.__className;
+      if (value.__classname__) return value.__classname__;
       if (value.constructor && value.constructor.name) return value.constructor.name;
       return Object.prototype.toString.call(value).slice(8, -1);
     }
@@ -263,15 +328,78 @@
       return children;
     }
 
-    function walkNode(node, depth, path, seen, counters) {
-      if (!node || seen.has(node) || depth > 32) return null;
-      if (node.__layaProfilerOverlay) return null;
-      seen.add(node);
-      counters.count += 1;
-      var children = getChildren(node);
-      var item = {
-        id: node.$_GID || node._id || node.id || path,
-        path: path,
+    function getCocosClass(cc, names) {
+      if (!cc) return null;
+      for (var index = 0; index < names.length; index += 1) {
+        var name = names[index];
+        try {
+          if (cc[name]) return cc[name];
+          if (cc.js && typeof cc.js.getClassByName === "function") {
+            var found = cc.js.getClassByName(name) || cc.js.getClassByName("cc." + name);
+            if (found) return found;
+          }
+        } catch (error) {}
+      }
+      return null;
+    }
+
+    function getCocosComponent(node, cc, names) {
+      if (!node || typeof node.getComponent !== "function") return null;
+      var cls = getCocosClass(cc, names);
+      try {
+        if (cls) {
+          var byClass = node.getComponent(cls);
+          if (byClass) return byClass;
+        }
+      } catch (error) {}
+      for (var index = 0; index < names.length; index += 1) {
+        try {
+          var byName = node.getComponent(names[index]) || node.getComponent("cc." + names[index]);
+          if (byName) return byName;
+        } catch (error) {}
+      }
+      var raw = node._components || node.components || [];
+      for (var compIndex = 0; compIndex < raw.length; compIndex += 1) {
+        var type = typeName(raw[compIndex]);
+        for (var nameIndex = 0; nameIndex < names.length; nameIndex += 1) {
+          if (type.indexOf(names[nameIndex].replace(/^cc\./, "")) !== -1) return raw[compIndex];
+        }
+      }
+      return null;
+    }
+
+    function getCocosComponents(node, cc) {
+      var list = [];
+      try {
+        if (typeof node.getComponents === "function") {
+          var cls = getCocosClass(cc, ["Component"]);
+          var comps = cls ? node.getComponents(cls) : node.getComponents("cc.Component");
+          if (comps && comps.length) {
+            return comps.map(function (comp) {
+              return engineClassName(comp, { type: "cocos", cc: cc });
+            }).filter(Boolean);
+          }
+        }
+      } catch (error) {}
+      var raw = node._components || node.components || [];
+      for (var index = 0; index < raw.length; index += 1) {
+        list.push(engineClassName(raw[index], { type: "cocos", cc: cc }));
+      }
+      return list;
+    }
+
+    function readVecAxis(value, axis, fallback) {
+      if (value == null) return fallback;
+      try {
+        var next = Number(value[axis]);
+        if (Number.isFinite(next)) return next;
+      } catch (error) {}
+      return fallback;
+    }
+
+    function readLayaNode(node) {
+      var alpha = round(node.alpha == null ? 1 : node.alpha, 3);
+      return {
         name: node.$owner && node.$owner.name ? node.$owner.name : node.name || typeName(node),
         nodeName: node.name || "",
         ownerName: node.$owner && node.$owner.name ? node.$owner.name : "",
@@ -282,6 +410,7 @@
         mouseThrough: node.mouseThrough === true,
         x: round(node.x, 2),
         y: round(node.y, 2),
+        z: 0,
         width: round(node.width, 2),
         height: round(node.height, 2),
         pivotX: round(node.pivotX || 0, 2),
@@ -289,17 +418,90 @@
         skewX: round(node.skewX || 0, 2),
         skewY: round(node.skewY || 0, 2),
         rotation: round(node.rotation || 0, 2),
+        eulerX: 0,
+        eulerY: 0,
+        eulerZ: round(node.rotation || 0, 2),
         scaleX: round(node.scaleX == null ? 1 : node.scaleX, 3),
         scaleY: round(node.scaleY == null ? 1 : node.scaleY, 3),
-        alpha: round(node.alpha == null ? 1 : node.alpha, 3),
+        scaleZ: 1,
+        alpha: alpha,
+        opacity: round(alpha * 255, 0),
         zOrder: round(node.zOrder || 0, 0),
-        destroyed: node.destroyed === true,
+        layer: 0,
+        uuid: String(node.$_GID || node._id || node.id || ""),
+        components: [],
+        destroyed: node.destroyed === true
+      };
+    }
+
+    function readCocosNode(node, cc, counters) {
+      var pos = node.position || {};
+      var scale = node.scale || {};
+      var euler = node.eulerAngles || {};
+      var ui = getCocosComponent(node, cc, ["UITransform"]);
+      var opacityComp = getCocosComponent(node, cc, ["UIOpacity"]);
+      var opacity = 255;
+      if (opacityComp && opacityComp.opacity != null) opacity = safeNumber(opacityComp.opacity, 255);
+      var components = getCocosComponents(node, cc);
+      if (counters && components.some(function (name) {
+        return /Sprite|MeshRenderer|SkinnedMeshRenderer|UIRenderer|Particle|Label|SpriteRenderer/.test(String(name));
+      })) {
+        counters.sprite += 1;
+      }
+      return {
+        name: node.name || engineClassName(node, { type: "cocos", cc: cc }),
+        nodeName: node.name || "",
+        ownerName: "",
+        type: engineClassName(node, { type: "cocos", cc: cc }),
+        visible: node.activeInHierarchy !== false,
+        active: node.active !== false,
+        mouseEnabled: true,
+        mouseThrough: false,
+        x: round(readVecAxis(pos, "x", 0), 2),
+        y: round(readVecAxis(pos, "y", 0), 2),
+        z: round(readVecAxis(pos, "z", 0), 2),
+        width: ui ? round(ui.width, 2) : 0,
+        height: ui ? round(ui.height, 2) : 0,
+        pivotX: ui ? round(ui.anchorX, 3) : 0.5,
+        pivotY: ui ? round(ui.anchorY, 3) : 0.5,
+        skewX: 0,
+        skewY: 0,
+        rotation: round(node.angle != null ? node.angle : readVecAxis(euler, "z", 0), 2),
+        eulerX: round(readVecAxis(euler, "x", 0), 2),
+        eulerY: round(readVecAxis(euler, "y", 0), 2),
+        eulerZ: round(readVecAxis(euler, "z", 0), 2),
+        scaleX: round(readVecAxis(scale, "x", 1), 3),
+        scaleY: round(readVecAxis(scale, "y", 1), 3),
+        scaleZ: round(readVecAxis(scale, "z", 1), 3),
+        alpha: round(opacity / 255, 3),
+        opacity: round(opacity, 0),
+        zOrder: round(typeof node.getSiblingIndex === "function" ? node.getSiblingIndex() : node.siblingIndex || 0, 0),
+        layer: node.layer != null ? node.layer : 0,
+        uuid: node.uuid || "",
+        components: components,
+        destroyed: node.isValid === false
+      };
+    }
+
+    function walkNode(node, depth, path, seen, counters, engine) {
+      if (!node || seen.has(node) || depth > 32) return null;
+      if (node.__layaProfilerOverlay) return null;
+      seen.add(node);
+      counters.count += 1;
+      var children = getChildren(node);
+      var props = engine && engine.type === "cocos" ? readCocosNode(node, engine.cc, counters) : readLayaNode(node);
+      var item = {
+        id: node.uuid || node.$_GID || node._id || node.id || path,
+        path: path,
         childCount: children.length,
         children: []
       };
+      Object.keys(props).forEach(function (key) {
+        item[key] = props[key];
+      });
 
       item.children = children.map(function (child, index) {
-        return walkNode(child, depth + 1, path + "." + index, seen, counters);
+        return walkNode(child, depth + 1, path + "." + index, seen, counters, engine);
       }).filter(Boolean);
       return item;
     }
@@ -344,7 +546,11 @@
         "_nativeObj",
         "_nativeTexture",
         "_glTexture",
-        "_texture2D"
+        "_texture2D",
+        "_gfxTexture",
+        "gfxTexture",
+        "nativeAsset",
+        "_nativeAsset"
       ];
 
       for (var index = 0; index < queue.length && output.length < 80; index += 1) {
@@ -474,6 +680,15 @@
         "Texture3D",
         "Texture2D",
         "BaseTexture",
+        "SpriteFrame",
+        "ImageAsset",
+        "EffectAsset",
+        "AnimationClip",
+        "AudioClip",
+        "BufferAsset",
+        "JsonAsset",
+        "TextAsset",
+        "BitmapFont",
         "Texture",
         "Mesh",
         "Material",
@@ -559,7 +774,7 @@
     function sourceUrl(source) {
       if (!source) return "";
       if (typeof source === "string") return source;
-      return source.currentSrc || source.src || source.url || source._url || source.path || source._path || "";
+      return source.currentSrc || source.src || source.url || source._url || source.nativeUrl || source._nativeUrl || source.path || source._path || "";
     }
 
     function bitmapPreview(source) {
@@ -600,7 +815,9 @@
         resource && resource.image,
         resource && resource._image,
         resource && resource.nativeObj,
-        resource && resource._nativeObj
+        resource && resource._nativeObj,
+        resource && resource.nativeAsset,
+        resource && resource._nativeAsset
       ];
       var candidates = [url];
       var seen = new WeakSet();
@@ -675,7 +892,30 @@
       return "";
     }
 
-    function collectResources(Laya) {
+    function eachCache(cache, callback) {
+      if (!cache) return;
+      if (typeof cache.forEach === "function") {
+        try {
+          cache.forEach(function (value, key) {
+            callback(key, value);
+          });
+          return;
+        } catch (error) {}
+      }
+      var map = cache._map || cache.map || cache._data;
+      if (!map) return;
+      if (map instanceof Map) {
+        map.forEach(function (value, key) {
+          callback(key, value);
+        });
+        return;
+      }
+      Object.keys(map).forEach(function (key) {
+        callback(key, map[key]);
+      });
+    }
+
+    function collectLayaResources(Laya) {
       var seen = new WeakSet();
       var resources = [];
       var sources = [
@@ -754,6 +994,50 @@
       }).slice(0, 1000);
     }
 
+    function collectCocosResources(cc) {
+      var seen = new WeakSet();
+      var resources = [];
+
+      function add(key, value, source) {
+        if (!value || typeof value !== "object" || seen.has(value)) return;
+        seen.add(value);
+        var bytes = gpuMemoryBytes(value);
+        var url = value.nativeUrl || value._nativeUrl || value.url || value._url || sourceUrl(value) || value.uuid || value._uuid || String(key || "");
+        var previewUrl = resourcePreviewUrl(value, url);
+        var refs = referenceCount(value);
+        if (refs == null && value.refCount != null) refs = round(safeNumber(value.refCount, 0), 0);
+        resources.push({
+          id: value.uuid || value._uuid || value.$_GID || value.id || resources.length + 1,
+          name: value.name || url || engineClassName(value, { type: "cocos", cc: cc }),
+          url: url,
+          previewUrl: previewUrl,
+          source: source,
+          type: resourceTypeName(value, url),
+          bytes: bytes,
+          size: resourceSize(value),
+          refCount: refs,
+          refText: refs === 0 ? "空闲" : refs == null ? "-" : String(refs),
+          destroyed: value.destroyed === true || value.isValid === false,
+          detail: compact(value, 1)
+        });
+      }
+
+      if (cc && cc.assetManager) {
+        eachCache(cc.assetManager.assets, function (key, value) {
+          add(key, value, "cc.assetManager.assets");
+        });
+      }
+
+      return resources.sort(function (a, b) {
+        return b.bytes - a.bytes;
+      }).slice(0, 1000);
+    }
+
+    function collectResources(engine) {
+      if (engine && engine.type === "cocos") return collectCocosResources(engine.cc);
+      return collectLayaResources(engine && engine.Laya);
+    }
+
     function firstNumber(values) {
       for (var index = 0; index < values.length; index += 1) {
         var value = Number(values[index]);
@@ -828,7 +1112,32 @@
       return round(webglDrawCalls, 0);
     }
 
-    function collectStats(Laya, nodeCount, resources) {
+    function profilerCounterValue(item) {
+      if (item == null) return 0;
+      if (typeof item === "number") return safeNumber(item, 0);
+      try {
+        if (item.counter && item.counter.value != null) return safeNumber(item.counter.value, 0);
+        if (item.value != null) return safeNumber(item.value, 0);
+      } catch (error) {}
+      return 0;
+    }
+
+    function getCocosDevice(cc) {
+      try {
+        return cc && cc.director && cc.director.root && cc.director.root.device || null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function getCocosDeviceGpuBytes(cc) {
+      var device = getCocosDevice(cc);
+      var memory = device && device.memoryStatus;
+      if (!memory) return 0;
+      return round(safeNumber(memory.textureSize, 0) + safeNumber(memory.bufferSize, 0), 0);
+    }
+
+    function collectLayaStats(Laya, nodeCount, resources) {
       var stat = Laya && Laya.Stat ? Laya.Stat : {};
       var latest = state.frameSamples[state.frameSamples.length - 1] || {};
       var heap = performance.memory && performance.memory.usedJSHeapSize ? performance.memory.usedJSHeapSize : 0;
@@ -848,6 +1157,47 @@
         renderTime: safeNumber(stat.renderTime, 0),
         updateTime: safeNumber(stat.updateTime, 0)
       };
+    }
+
+    function collectCocosStats(cc, nodeCount, spriteCount, resources) {
+      var latest = state.frameSamples[state.frameSamples.length - 1] || {};
+      var heap = performance.memory && performance.memory.usedJSHeapSize ? performance.memory.usedJSHeapSize : 0;
+      var profiler = cc && cc.profiler;
+      var stats = profiler && profiler.stats ? profiler.stats : {};
+      var device = getCocosDevice(cc);
+      var attributed = resources.reduce(function (sum, item) {
+        return sum + safeNumber(item.bytes, 0);
+      }, 0);
+      var deviceGpu = getCocosDeviceGpuBytes(cc);
+      var webglDrawCalls = safeNumber(state.lastWebGLDrawCalls, 0);
+      var deltaTime = 0;
+      try {
+        if (cc.director && typeof cc.director.getDeltaTime === "function") deltaTime = cc.director.getDeltaTime() * 1000;
+      } catch (error) {}
+      return {
+        fps: firstPositiveNumber([profilerCounterValue(stats.fps), latest.fps]) || safeNumber(latest.fps, 0),
+        frameTime: firstPositiveNumber([profilerCounterValue(stats.frame), deltaTime, latest.frameTime]) || safeNumber(latest.frameTime, 0),
+        heapUsed: heap,
+        gpuMemory: deviceGpu > 0 ? deviceGpu : attributed,
+        gpuKnown: attributed,
+        gpuDevice: deviceGpu,
+        drawCall: firstPositiveNumber([
+          device && device.numDrawCalls,
+          profilerCounterValue(stats.draws),
+          webglDrawCalls
+        ]) || round(webglDrawCalls, 0),
+        node: nodeCount,
+        sprite: spriteCount || 0,
+        triangle: firstPositiveNumber([device && device.numTris, profilerCounterValue(stats.tricount)]),
+        shaderCall: 0,
+        renderTime: profilerCounterValue(stats.render),
+        updateTime: profilerCounterValue(stats.logic)
+      };
+    }
+
+    function collectStats(engine, nodeCount, spriteCount, resources) {
+      if (engine && engine.type === "cocos") return collectCocosStats(engine.cc, nodeCount, spriteCount, resources);
+      return collectLayaStats(engine && engine.Laya, nodeCount, resources);
     }
 
     function gameConfigRoot() {
@@ -957,7 +1307,7 @@
       return current;
     }
 
-    function collectRuntimeState(Laya) {
+    function collectRuntimeState(engine) {
       var stateCandidates = {};
       [
         "__LayaProfilerState",
@@ -982,6 +1332,7 @@
         }
       });
 
+      var Laya = engine && engine.Laya;
       if (Laya && Laya.stage) {
         stateCandidates.Stage = compact({
           mouseX: Laya.stage.mouseX,
@@ -990,7 +1341,37 @@
           timerScale: Laya.timer && Laya.timer.scale
         }, 2);
       }
+
+      var cc = engine && engine.cc;
+      if (engine && engine.type === "cocos" && cc && cc.director) {
+        var scene = null;
+        var scheduler = null;
+        try {
+          scene = cc.director.getScene();
+        } catch (error) {}
+        try {
+          scheduler = typeof cc.director.getScheduler === "function" ? cc.director.getScheduler() : null;
+        } catch (error) {}
+        stateCandidates.Scene = compact({
+          name: scene && scene.name,
+          paused: typeof cc.director.isPaused === "function" ? cc.director.isPaused() : false,
+          timerScale: scheduler && typeof scheduler.getTimeScale === "function" ? scheduler.getTimeScale() : 1
+        }, 2);
+      }
       return stateCandidates;
+    }
+
+    function readTimerScale(engine) {
+      try {
+        if (engine && engine.type === "cocos" && engine.cc && engine.cc.director && typeof engine.cc.director.getScheduler === "function") {
+          var scheduler = engine.cc.director.getScheduler();
+          if (scheduler && typeof scheduler.getTimeScale === "function") return safeNumber(scheduler.getTimeScale(), 1);
+        }
+      } catch (error) {}
+      try {
+        if (engine && engine.Laya && engine.Laya.timer) return safeNumber(engine.Laya.timer.scale, 1);
+      } catch (error) {}
+      return 1;
     }
 
     function ensureHighlightOverlay() {
@@ -1069,6 +1450,139 @@
         if (candidates[index].isConnected !== false) return candidates[index];
       }
       return candidates[0] || null;
+    }
+
+    function findCocosCanvas(cc) {
+      var candidates = [];
+      function add(value) {
+        var canvas = unwrapCanvas(value);
+        if (canvas && candidates.indexOf(canvas) === -1) candidates.push(canvas);
+      }
+      if (cc && cc.game) {
+        add(cc.game.canvas);
+        add(cc.game.container && cc.game.container.querySelector && cc.game.container.querySelector("canvas"));
+      }
+      Array.prototype.forEach.call(document.querySelectorAll("canvas"), add);
+      for (var index = 0; index < candidates.length; index += 1) {
+        if (candidates[index].isConnected !== false) return candidates[index];
+      }
+      return candidates[0] || null;
+    }
+
+    function findCocosCamera(cc, node) {
+      var cameras = [];
+      try {
+        var root = cc && cc.director && cc.director.root;
+        if (root && Array.isArray(root.cameraList)) {
+          root.cameraList.forEach(function (camera) {
+            if (camera && cameras.indexOf(camera) === -1) cameras.push(camera);
+          });
+        }
+      } catch (error) {}
+      try {
+        var scene = cc && cc.director && cc.director.getScene();
+        var cameraClass = getCocosClass(cc, ["Camera"]);
+        if (scene && typeof scene.getComponentsInChildren === "function" && cameraClass) {
+          var found = scene.getComponentsInChildren(cameraClass) || [];
+          found.forEach(function (camera) {
+            if (camera && cameras.indexOf(camera) === -1) cameras.push(camera);
+          });
+        }
+      } catch (error) {}
+      var layer = node && node.layer;
+      for (var index = 0; index < cameras.length; index += 1) {
+        var camera = cameras[index];
+        var visibility = camera.visibility != null ? camera.visibility : camera._visibility;
+        var cameraNode = camera.node;
+        var active = !cameraNode || cameraNode.activeInHierarchy !== false;
+        if (!active) continue;
+        if (layer == null || visibility == null || (visibility & layer)) return camera;
+      }
+      return cameras[0] || null;
+    }
+
+    function cocosWorldToClient(worldX, worldY, worldZ, cc, camera, canvas, rect) {
+      var screenX = worldX;
+      var screenY = worldY;
+      try {
+        if (camera && typeof camera.worldToScreen === "function") {
+          var vec = cc && cc.Vec3 ? new cc.Vec3(worldX, worldY, worldZ || 0) : { x: worldX, y: worldY, z: worldZ || 0 };
+          var out = camera.worldToScreen(vec);
+          if (out) {
+            screenX = safeNumber(out.x, worldX);
+            screenY = safeNumber(out.y, worldY);
+          }
+        }
+      } catch (error) {}
+      var dpr = window.devicePixelRatio || 1;
+      try {
+        if (cc && cc.view && typeof cc.view.getDevicePixelRatio === "function") {
+          dpr = cc.view.getDevicePixelRatio() || dpr;
+        }
+      } catch (error) {}
+      var canvasWidth = canvas && canvas.width ? canvas.width : rect.width;
+      var canvasHeight = canvas && canvas.height ? canvas.height : rect.height;
+      var cssWidth = canvasWidth / Math.max(dpr, 0.01);
+      var cssHeight = canvasHeight / Math.max(dpr, 0.01);
+      return {
+        x: rect.left + (screenX / Math.max(dpr, 0.01)) * (rect.width / Math.max(cssWidth, 1)),
+        y: rect.top + ((canvasHeight - screenY) / Math.max(dpr, 0.01)) * (rect.height / Math.max(cssHeight, 1))
+      };
+    }
+
+    function nodeCocosGlobalBounds(node, cc) {
+      if (!node || !cc) return null;
+      var canvas = findCocosCanvas(cc);
+      var rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: innerWidth, height: innerHeight };
+      var camera = findCocosCamera(cc, node);
+      var corners = [];
+      var ui = getCocosComponent(node, cc, ["UITransform"]);
+      try {
+        if (ui && typeof ui.getBoundingBoxToWorld === "function") {
+          var box = ui.getBoundingBoxToWorld();
+          var x = safeNumber(box.x, 0);
+          var y = safeNumber(box.y, 0);
+          var width = safeNumber(box.width, 0);
+          var height = safeNumber(box.height, 0);
+          if (width && height) {
+            corners = [
+              [x, y, 0],
+              [x + width, y, 0],
+              [x + width, y + height, 0],
+              [x, y + height, 0]
+            ];
+          }
+        }
+      } catch (error) {}
+      if (!corners.length) {
+        var pos = node.worldPosition;
+        try {
+          if (!pos && typeof node.getWorldPosition === "function") pos = node.getWorldPosition();
+        } catch (error) {}
+        if (!pos) pos = node.position || { x: 0, y: 0, z: 0 };
+        var px = safeNumber(pos.x, 0);
+        var py = safeNumber(pos.y, 0);
+        var pz = safeNumber(pos.z, 0);
+        corners = [
+          [px - 20, py - 20, pz],
+          [px + 20, py - 20, pz],
+          [px + 20, py + 20, pz],
+          [px - 20, py + 20, pz]
+        ];
+      }
+      var points = corners.map(function (corner) {
+        return cocosWorldToClient(corner[0], corner[1], corner[2], cc, camera, canvas, rect);
+      });
+      var left = Math.min(points[0].x, points[1].x, points[2].x, points[3].x);
+      var right = Math.max(points[0].x, points[1].x, points[2].x, points[3].x);
+      var top = Math.min(points[0].y, points[1].y, points[2].y, points[3].y);
+      var bottom = Math.max(points[0].y, points[1].y, points[2].y, points[3].y);
+      return {
+        left: left,
+        top: top,
+        width: right - left,
+        height: bottom - top
+      };
     }
 
     function readMatrix(value) {
@@ -1346,21 +1860,22 @@
         hideStageHighlightOverlay();
         return;
       }
-      var Laya = findLaya();
+      var engine = detectEngine();
       var node = findNodeByPath(highlight.path);
-      if (!node || node.visible === false) {
+      var hidden = !node || node.visible === false || node.activeInHierarchy === false;
+      if (hidden) {
         ensureHighlightOverlay().style.display = "none";
         hideStageHighlightOverlay();
         return;
       }
-      if (drawStageHighlight(Laya, node)) {
+      if (engine.type !== "cocos" && drawStageHighlight(engine.Laya, node)) {
         ensureHighlightOverlay().style.display = "none";
         startHighlightOverlayLoop();
         return;
       }
       var overlay = ensureHighlightOverlay();
-      var bounds = nodeGlobalBounds(node);
-      if (!bounds) {
+      var bounds = engine.type === "cocos" ? nodeCocosGlobalBounds(node, engine.cc) : nodeGlobalBounds(node);
+      if (!bounds || !bounds.width || !bounds.height) {
         overlay.style.display = "none";
         hideStageHighlightOverlay();
         return;
@@ -1381,11 +1896,11 @@
     }
 
     function findNodeByPath(path) {
-      var Laya = findLaya();
-      if (!Laya || !Laya.stage || !path) return null;
-      if (path === "0") return Laya.stage;
+      var root = getEngineRoot();
+      if (!root || !path) return null;
+      if (path === "0") return root;
       var parts = String(path).split(".");
-      var node = Laya.stage;
+      var node = root;
       for (var index = 1; index < parts.length; index += 1) {
         var childIndex = Number(parts[index]);
         if (!Number.isFinite(childIndex)) return null;
@@ -1396,12 +1911,12 @@
       return node;
     }
 
-    function gpuSummary(resources) {
+    function gpuSummary(resources, deviceTotal) {
       var buckets = {};
-      var total = 0;
+      var known = 0;
       resources.forEach(function (resource) {
         var bytes = safeNumber(resource.bytes, 0);
-        total += bytes;
+        known += bytes;
         var bucket = resource.type || "Unknown";
         if (!buckets[bucket]) {
           buckets[bucket] = {
@@ -1420,10 +1935,12 @@
           bytes: bytes
         });
       });
+      var reported = safeNumber(deviceTotal, 0);
+      var total = reported > known ? reported : known;
       return {
         total: total,
-        known: total,
-        unknown: 0,
+        known: known,
+        unknown: Math.max(0, total - known),
         count: resources.length,
         buckets: Object.keys(buckets).sort().map(function (name) {
           var bucket = buckets[name];
@@ -1435,22 +1952,31 @@
       };
     }
 
+    function runtimeLabelOf(engine) {
+      if (engine.type === "laya") return "LayaAir " + layaRuntimeVersion(engine.Laya);
+      if (engine.type === "cocos") return "Cocos Creator " + (cocosRuntimeVersion(engine.cc) || "3.8");
+      return "未检测到 LayaAir / Cocos Creator";
+    }
+
     function collect() {
-      var Laya = findLaya();
-      var counters = { count: 0 };
-      var tree = Laya && Laya.stage ? walkNode(Laya.stage, 0, "0", new WeakSet(), counters) : null;
-      var resources = collectResources(Laya);
-      var stats = collectStats(Laya, counters.count, resources);
+      var engine = detectEngine();
+      var counters = { count: 0, sprite: 0 };
+      var root = getEngineRoot(engine);
+      var tree = root ? walkNode(root, 0, "0", new WeakSet(), counters, engine) : null;
+      var resources = collectResources(engine);
+      var stats = collectStats(engine, counters.count, counters.sprite, resources);
       return {
         ok: true,
         time: Date.now(),
-        detected: !!Laya,
-        runtimeLabel: Laya ? "LayaAir " + layaRuntimeVersion(Laya) : "未检测到 Laya",
+        detected: engine.type !== "none",
+        engine: engine.type,
+        runtimeLabel: runtimeLabelOf(engine),
+        timerScale: readTimerScale(engine),
         nodes: tree,
-        config: collectConfig(Laya),
+        config: collectConfig(),
         resources: resources,
-        gpu: gpuSummary(resources),
-        state: collectRuntimeState(Laya),
+        gpu: gpuSummary(resources, stats.gpuDevice),
+        state: collectRuntimeState(engine),
         frame: {
           samples: state.frameSamples.slice(-120),
           stats: {
@@ -1469,8 +1995,84 @@
       };
     }
 
+    function setCocosTimeScale(cc, scale) {
+      try {
+        var scheduler = cc && cc.director && typeof cc.director.getScheduler === "function" ? cc.director.getScheduler() : null;
+        if (scheduler && typeof scheduler.setTimeScale === "function") scheduler.setTimeScale(scale);
+      } catch (error) {}
+    }
+
+    function releaseCocosUnusedAssets(cc) {
+      if (cc && cc.assetManager && typeof cc.assetManager.releaseUnusedAssets === "function") {
+        cc.assetManager.releaseUnusedAssets();
+        return;
+      }
+      if (!cc || !cc.assetManager || typeof cc.assetManager.releaseAsset !== "function") return;
+      var pending = [];
+      eachCache(cc.assetManager.assets, function (key, asset) {
+        try {
+          if (asset && safeNumber(asset.refCount, -1) === 0) pending.push(asset);
+        } catch (error) {}
+      });
+      pending.forEach(function (asset) {
+        try {
+          cc.assetManager.releaseAsset(asset);
+        } catch (error) {}
+      });
+    }
+
+    function setCocosNodeVec(node, kind, axis, value) {
+      var current = kind === "position" ? node.position : kind === "scale" ? node.scale : node.eulerAngles;
+      var fallback = kind === "scale" ? 1 : 0;
+      var x = readVecAxis(current, "x", fallback);
+      var y = readVecAxis(current, "y", fallback);
+      var z = readVecAxis(current, "z", fallback);
+      if (axis === "x") x = value;
+      if (axis === "y") y = value;
+      if (axis === "z") z = value;
+      if (kind === "position" && typeof node.setPosition === "function") node.setPosition(x, y, z);
+      else if (kind === "scale" && typeof node.setScale === "function") node.setScale(x, y, z);
+      else if (kind === "euler" && typeof node.setRotationFromEuler === "function") node.setRotationFromEuler(x, y, z);
+    }
+
+    function setCocosNodeProperty(node, property, value, cc) {
+      if (property === "name") node.name = String(value);
+      else if (property === "active" || property === "visible") node.active = !!value;
+      else if (property === "x") setCocosNodeVec(node, "position", "x", value);
+      else if (property === "y") setCocosNodeVec(node, "position", "y", value);
+      else if (property === "z") setCocosNodeVec(node, "position", "z", value);
+      else if (property === "scaleX") setCocosNodeVec(node, "scale", "x", value);
+      else if (property === "scaleY") setCocosNodeVec(node, "scale", "y", value);
+      else if (property === "scaleZ") setCocosNodeVec(node, "scale", "z", value);
+      else if (property === "eulerX") setCocosNodeVec(node, "euler", "x", value);
+      else if (property === "eulerY") setCocosNodeVec(node, "euler", "y", value);
+      else if (property === "eulerZ") setCocosNodeVec(node, "euler", "z", value);
+      else if (property === "rotation") {
+        if ("angle" in node) node.angle = value;
+        else setCocosNodeVec(node, "euler", "z", value);
+      } else if (property === "width" || property === "height" || property === "pivotX" || property === "pivotY") {
+        var ui = getCocosComponent(node, cc, ["UITransform"]);
+        if (!ui) return { ok: false, message: "节点没有 UITransform" };
+        if (property === "width") ui.width = value;
+        if (property === "height") ui.height = value;
+        if (property === "pivotX") ui.anchorX = value;
+        if (property === "pivotY") ui.anchorY = value;
+      } else if (property === "alpha" || property === "opacity") {
+        var opacityComp = getCocosComponent(node, cc, ["UIOpacity"]);
+        if (!opacityComp) return { ok: false, message: "节点没有 UIOpacity" };
+        opacityComp.opacity = property === "alpha" ? Math.max(0, Math.min(255, value * 255)) : value;
+      } else if (property === "layer") {
+        node.layer = value;
+      } else if (property === "zOrder") {
+        if (typeof node.setSiblingIndex === "function") node.setSiblingIndex(value);
+        else return { ok: false, message: "节点不支持 siblingIndex" };
+      } else {
+        return { ok: false, message: "不可编辑属性: " + property };
+      }
+      return { ok: true, message: property + " = " + value };
+    }
+
     function command(name) {
-      var Laya = findLaya();
       if (name === "clearConsole" || name && name.type === "clearConsole") {
         state.logs = [];
         return { ok: true, message: "控制台日志已清除" };
@@ -1486,35 +2088,117 @@
           return { ok: false, message: error.message || String(error) };
         }
       }
-      if (!Laya) return { ok: false, message: "未检测到 Laya 运行时" };
+      if (name && name.type === "getGameConfigData") {
+        var configTable = getGameConfigTable(name.table);
+        if (!configTable) return { ok: false, message: "未找到配置表: " + name.table };
+        var tableData = configTable.data;
+        if (!tableData || typeof tableData !== "object") return { ok: false, message: name.table + ".data 不存在" };
+        return {
+          ok: true,
+          table: name.table,
+          count: configDataCount(tableData),
+          data: cloneGameConfigData(tableData, 12)
+        };
+      }
+      if (name && name.type === "setGameConfigValue") {
+        var table = getGameConfigTable(name.table);
+        if (!table) return { ok: false, message: "未找到配置表: " + name.table };
+        var data = table.data;
+        if (!data || typeof data !== "object") return { ok: false, message: name.table + ".data 不存在" };
+        var path = Array.isArray(name.path) ? name.path : [];
+        if (!path.length) return { ok: false, message: "配置路径为空" };
+        var target = gameConfigValueAtPath(data, path, false);
+        if (!target || !target.target) return { ok: false, message: "未找到配置字段: " + path.join(".") };
+        target.target[target.key] = name.value;
+        return {
+          ok: true,
+          message: name.table + ".data." + path.join(".") + " = " + JSON.stringify(name.value),
+          value: cloneGameConfigData(target.target[target.key], 4)
+        };
+      }
+      if (name && name.type === "spliceGameConfigArray") {
+        var arrayTable = getGameConfigTable(name.table);
+        if (!arrayTable) return { ok: false, message: "未找到配置表: " + name.table };
+        var arrayData = arrayTable.data;
+        if (!arrayData || typeof arrayData !== "object") return { ok: false, message: name.table + ".data 不存在" };
+        var arrayPath = Array.isArray(name.path) ? name.path : [];
+        var arrayValue = arrayPath.length ? getLocalValueAtPath(arrayData, arrayPath) : arrayData;
+        if (!Array.isArray(arrayValue)) return { ok: false, message: "目标不是数组: " + arrayPath.join(".") };
+        var op = String(name.op || "");
+        var index = Math.max(0, Math.min(arrayValue.length, safeNumber(name.index, arrayValue.length)));
+        if (op === "add") {
+          var source = arrayValue.length ? arrayValue[Math.max(0, index - 1)] : null;
+          arrayValue.splice(index, 0, cloneGameConfigData(source, 12));
+        } else if (op === "delete") {
+          if (!arrayValue.length) return { ok: false, message: "数组已为空" };
+          arrayValue.splice(Math.max(0, Math.min(arrayValue.length - 1, index)), 1);
+        } else {
+          return { ok: false, message: "未知数组操作: " + op };
+        }
+        return {
+          ok: true,
+          message: name.table + ".data." + arrayPath.join(".") + " 数组已更新",
+          value: cloneGameConfigData(arrayValue, 12)
+        };
+      }
+
+      var engine = detectEngine();
+      var Laya = engine.Laya;
+      var cc = engine.cc;
+      if (engine.type === "none") return { ok: false, message: "未检测到 LayaAir / Cocos Creator 运行时" };
       try {
         if (name === "toggleStat") {
+          if (engine.type === "cocos" && cc && cc.profiler) {
+            var showing = typeof cc.profiler.isShowingStats === "function" ? cc.profiler.isShowingStats() : state.statVisible;
+            if (showing && typeof cc.profiler.hideStats === "function") {
+              cc.profiler.hideStats();
+              state.statVisible = false;
+            } else if (typeof cc.profiler.showStats === "function") {
+              cc.profiler.showStats();
+              state.statVisible = true;
+            }
+            return { ok: true, message: state.statVisible ? "Profiler 面板已显示" : "Profiler 面板已隐藏" };
+          }
           state.statVisible = !state.statVisible;
-          if (state.statVisible && Laya.Stat && typeof Laya.Stat.show === "function") {
+          if (state.statVisible && Laya && Laya.Stat && typeof Laya.Stat.show === "function") {
             Laya.Stat.show(0, 0);
-          } else if (!state.statVisible && Laya.Stat && typeof Laya.Stat.hide === "function") {
+          } else if (!state.statVisible && Laya && Laya.Stat && typeof Laya.Stat.hide === "function") {
             Laya.Stat.hide();
           }
           return { ok: true, message: state.statVisible ? "Stat 面板已显示" : "Stat 面板已隐藏" };
         }
         if (name === "gc") {
-          if (Laya.Resource && typeof Laya.Resource.destroyUnusedResources === "function") {
+          if (engine.type === "cocos") {
+            releaseCocosUnusedAssets(cc);
+          } else if (Laya && Laya.Resource && typeof Laya.Resource.destroyUnusedResources === "function") {
             Laya.Resource.destroyUnusedResources();
           }
           if (window.gc) window.gc();
           return { ok: true, message: "已请求资源回收" };
         }
         if (name === "pauseGame") {
-          if (Laya.timer) Laya.timer.scale = 0;
+          if (engine.type === "cocos") {
+            setCocosTimeScale(cc, 0);
+            return { ok: true, message: "cc.director.getScheduler().setTimeScale(0)" };
+          }
+          if (Laya && Laya.timer) Laya.timer.scale = 0;
           return { ok: true, message: "Laya.timer.scale = 0" };
         }
         if (name === "resumeGame") {
-          if (Laya.timer) Laya.timer.scale = 1;
+          if (engine.type === "cocos") {
+            setCocosTimeScale(cc, 1);
+            return { ok: true, message: "cc.director.getScheduler().setTimeScale(1)" };
+          }
+          if (Laya && Laya.timer) Laya.timer.scale = 1;
           return { ok: true, message: "Laya.timer.scale = 1" };
         }
         if (name && name.type === "setTimeScale") {
           var scale = safeNumber(name.value, 1);
-          if (Laya.timer) Laya.timer.scale = scale;
+          if (engine.type === "cocos") {
+            setCocosTimeScale(cc, scale);
+            return { ok: true, message: "cc.director.getScheduler().setTimeScale(" + scale + ")" };
+          }
+          if (Laya && Laya.timer) Laya.timer.scale = scale;
           return { ok: true, message: "Laya.timer.scale = " + scale };
         }
         if (name && name.type === "highlightNode") {
@@ -1528,6 +2212,10 @@
         if (name && name.type === "setNodeVisible") {
           var node = findNodeByPath(name.path);
           if (!node) return { ok: false, message: "未找到节点: " + name.path };
+          if (engine.type === "cocos") {
+            node.active = !!name.visible;
+            return { ok: true, message: (node.name || typeName(node)) + " active = " + node.active };
+          }
           node.visible = !!name.visible;
           return { ok: true, message: (node.name || typeName(node)) + " visible = " + node.visible };
         }
@@ -1550,79 +2238,34 @@
             mouseThrough: "boolean",
             x: "number",
             y: "number",
+            z: "number",
             width: "number",
             height: "number",
             pivotX: "number",
             pivotY: "number",
             scaleX: "number",
             scaleY: "number",
+            scaleZ: "number",
             skewX: "number",
             skewY: "number",
             rotation: "number",
+            eulerX: "number",
+            eulerY: "number",
+            eulerZ: "number",
             alpha: "number",
-            zOrder: "number"
+            opacity: "number",
+            zOrder: "number",
+            layer: "number"
           };
           if (!editable[property]) return { ok: false, message: "不可编辑属性: " + property };
           var nextValue = name.value;
           if (editable[property] === "number") nextValue = safeNumber(nextValue, targetNode[property] || 0);
           if (editable[property] === "boolean") nextValue = !!nextValue;
           if (editable[property] === "string") nextValue = String(nextValue == null ? "" : nextValue);
+          if (engine.type === "cocos") return setCocosNodeProperty(targetNode, property, nextValue, cc);
           targetNode[property] = nextValue;
           if (property === "name" && targetNode.$owner) targetNode.$owner.name = nextValue;
           return { ok: true, message: property + " = " + nextValue };
-        }
-        if (name && name.type === "getGameConfigData") {
-          var configTable = getGameConfigTable(name.table);
-          if (!configTable) return { ok: false, message: "未找到配置表: " + name.table };
-          var tableData = configTable.data;
-          if (!tableData || typeof tableData !== "object") return { ok: false, message: name.table + ".data 不存在" };
-          return {
-            ok: true,
-            table: name.table,
-            count: configDataCount(tableData),
-            data: cloneGameConfigData(tableData, 12)
-          };
-        }
-        if (name && name.type === "setGameConfigValue") {
-          var table = getGameConfigTable(name.table);
-          if (!table) return { ok: false, message: "未找到配置表: " + name.table };
-          var data = table.data;
-          if (!data || typeof data !== "object") return { ok: false, message: name.table + ".data 不存在" };
-          var path = Array.isArray(name.path) ? name.path : [];
-          if (!path.length) return { ok: false, message: "配置路径为空" };
-          var target = gameConfigValueAtPath(data, path, false);
-          if (!target || !target.target) return { ok: false, message: "未找到配置字段: " + path.join(".") };
-          target.target[target.key] = name.value;
-          return {
-            ok: true,
-            message: name.table + ".data." + path.join(".") + " = " + JSON.stringify(name.value),
-            value: cloneGameConfigData(target.target[target.key], 4)
-          };
-        }
-        if (name && name.type === "spliceGameConfigArray") {
-          var arrayTable = getGameConfigTable(name.table);
-          if (!arrayTable) return { ok: false, message: "未找到配置表: " + name.table };
-          var arrayData = arrayTable.data;
-          if (!arrayData || typeof arrayData !== "object") return { ok: false, message: name.table + ".data 不存在" };
-          var arrayPath = Array.isArray(name.path) ? name.path : [];
-          var arrayValue = arrayPath.length ? getLocalValueAtPath(arrayData, arrayPath) : arrayData;
-          if (!Array.isArray(arrayValue)) return { ok: false, message: "目标不是数组: " + arrayPath.join(".") };
-          var op = String(name.op || "");
-          var index = Math.max(0, Math.min(arrayValue.length, safeNumber(name.index, arrayValue.length)));
-          if (op === "add") {
-            var source = arrayValue.length ? arrayValue[Math.max(0, index - 1)] : null;
-            arrayValue.splice(index, 0, cloneGameConfigData(source, 12));
-          } else if (op === "delete") {
-            if (!arrayValue.length) return { ok: false, message: "数组已为空" };
-            arrayValue.splice(Math.max(0, Math.min(arrayValue.length - 1, index)), 1);
-          } else {
-            return { ok: false, message: "未知数组操作: " + op };
-          }
-          return {
-            ok: true,
-            message: name.table + ".data." + arrayPath.join(".") + " 数组已更新",
-            value: cloneGameConfigData(arrayValue, 12)
-          };
         }
         return { ok: false, message: "未知命令: " + name };
       } catch (error) {

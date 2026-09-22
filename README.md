@@ -1,10 +1,11 @@
-# Laya Profiler
+# Game Profiler
 
-Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打开 DevTools 后会新增 `Laya Profiler` 面板，用于查看运行时状态、节点层级、游戏配置、资源快照、GPU 内存归因、页面控制台日志和监控指标。
+Game Profiler 是一个用于 LayaAir 和 Cocos Creator 3.8 Web 游戏的 Chrome DevTools 扩展。打开 DevTools 后会新增 `Game Profiler` 面板，用于查看运行时状态、节点层级、游戏配置、资源快照、GPU 内存归因、页面控制台日志和监控指标。
 
-- 插件版本：`0.1.24`
+- 插件版本：`0.2.0`
 - 作者：UCoyote
 - 邮箱：501202461@qq.com
+- 支持引擎：LayaAir、Cocos Creator 3.8
 
 ## 安装
 
@@ -12,12 +13,12 @@ Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打
 2. 开启右上角的「开发者模式」。
 3. 点击「加载已解压的扩展程序」。
 4. 选择解压的插件目录：`LayaProfilerPlugin`。
-5. 打开一个 LayaAir Web 游戏页面，按 `F12` 打开 DevTools。
-6. 在 DevTools 顶部选择 `Laya Profiler` 面板。
+5. 打开一个 LayaAir 或 Cocos Creator 3.8 Web 游戏页面，按 `F12` 打开 DevTools。
+6. 在 DevTools 顶部选择 `Game Profiler` 面板。
 
 ## 顶部监控
 
-- 自动检测当前页面中的 Laya 运行时。
+- 自动检测当前页面中的 LayaAir 或 Cocos Creator 运行时，顶部会显示引擎名称和版本。
 - 顶部显示 `FPS`、`FrameTime`、`HeapUsed`、`GPUMemory`、`DrawCall`、`Node`。
 - 支持全局搜索节点、资源和日志。
 - 支持暂停采样和手动刷新。
@@ -25,12 +26,14 @@ Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打
 
 ## 节点层级
 
-- 递归读取 `Laya.stage` 显示树。
+- LayaAir 递归读取 `Laya.stage` 显示树；Cocos Creator 递归读取 `cc.director.getScene()` 显示树。
 - 展示节点类型、路径、子节点数量、销毁状态等信息。
+- Cocos 节点还会展示 UUID、Layer、SiblingIndex 和组件列表。
 - 支持节点过滤、展开全部、折叠全部、刷新层级。
-- 支持暂停或恢复游戏计时器，并可修改 `Laya.timer.scale`。
-- 支持选中节点后在舞台上显示红色框选标记，框选位置会计算父节点变换后的舞台坐标。
-- 支持快捷修改节点常用属性：名称、激活、可见、位置、尺寸、锚点、缩放、倾斜、旋转、透明度、鼠标触摸、`zOrder`。
+- 支持暂停或恢复游戏计时器，并可修改时间缩放：LayaAir 使用 `Laya.timer.scale`，Cocos Creator 使用 `cc.director.getScheduler().setTimeScale()`。
+- 支持选中节点后在舞台上显示红色框选标记。LayaAir 会计算父节点变换后的舞台坐标；Cocos Creator 会通过 `UITransform.getBoundingBoxToWorld()` 和摄像机 `worldToScreen` 映射到页面坐标。
+- LayaAir 支持快捷修改：名称、激活、可见、位置、尺寸、锚点、缩放、倾斜、旋转、透明度、鼠标触摸、`zOrder`。
+- Cocos Creator 支持快捷修改：名称、激活、位置 XYZ、缩放 XYZ、欧拉角、2D 角度、UI 尺寸、锚点、透明度、Layer、SiblingIndex。
 - 支持将当前选中节点输出到 Chrome Console，输出的是真实节点对象，可在控制台展开对象并修改字段。
 
 ## 游戏配置
@@ -53,10 +56,9 @@ Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打
 
 ## 开发面板
 
-- 支持切换 `Laya.Stat` 面板。
-- 支持触发资源回收：调用 `Laya.Resource.destroyUnusedResources()`，并在可用时调用 `window.gc()`。
-- 支持暂停 `Laya.timer`。
-- 支持恢复 `Laya.timer`。
+- 支持切换性能面板：LayaAir 调用 `Laya.Stat.show/hide`，Cocos Creator 调用 `cc.profiler.showStats/hideStats`。
+- 支持触发资源回收：LayaAir 调用 `Laya.Resource.destroyUnusedResources()`；Cocos Creator 优先调用 `cc.assetManager.releaseUnusedAssets()`，否则释放 `refCount === 0` 的资源。可用时还会调用 `window.gc()`。
+- 支持暂停和恢复游戏时间缩放。
 - 命令执行结果会输出到开发面板中。
 
 ## 资源管理
@@ -69,6 +71,7 @@ Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打
 - 选中一个快照后，会列出除自身外的其他快照，可快速发起比较。
 - 比较模式显示资源变化类型，包括新增、移除和变更。
 - 资源表展示预览、对象名、来源、GPU 内存、资源类型、尺寸、引用计数。
+- LayaAir 资源来源包括 `Laya.Loader` 和 `Laya.Resource` 缓存；Cocos Creator 资源来源为 `cc.assetManager.assets`。
 - GPU 内存、资源类型、尺寸、引用计数和变化类型支持排序。
 - 图片资源支持缩略图和悬停大图预览。
 - 非图片资源会显示不可预览提示。
@@ -80,6 +83,7 @@ Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打
 - 分组项支持点击展开。
 - 展开后展示资源路径、资源名称、尺寸和占用的 GPU 内存大小。
 - 优先读取资源对象和内部纹理对象上的显存字段。
+- Cocos Creator 还会读取 `cc.director.root.device.memoryStatus` 作为 GPU 总量，并与资源归因对比得出未归因显存。
 - 缺失显存字段时，会按纹理尺寸和格式估算 GPU 内存。
 
 ## 控制台
@@ -111,4 +115,6 @@ Laya Profiler 是一个用于 LayaAir Web 游戏的 Chrome DevTools 扩展。打
 
 ## 兼容说明
 
-不同 LayaAir 版本和项目封装方式差异较大，资源缓存、GPU 显存和配置对象会使用兼容式探测。能从引擎对象读取到的字段会直接显示；缺失字段会使用近似估算，适合定位趋势和大对象，不等同于浏览器底层精确显存统计。
+不同 LayaAir / Cocos Creator 版本和项目封装方式差异较大，资源缓存、GPU 显存和配置对象会使用兼容式探测。能从引擎对象读取到的字段会直接显示；缺失字段会使用近似估算，适合定位趋势和大对象，不等同于浏览器底层精确显存统计。
+
+Cocos Creator 以 3.8 Web 运行时为目标：依赖页面中的全局 `cc`、`cc.director.getScene()`、`cc.assetManager` 和 `cc.profiler`。构建后若关闭引擎调试信息或裁剪了这些模块，部分统计可能退回到 WebGL DrawCall 钩子和尺寸估算。

@@ -545,6 +545,14 @@ body.tab-dragging .bottom-dock {
   grid-template-columns: 68px minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.inspector-triple {
+  grid-template-columns: 68px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.inspector-triple label:last-of-type em {
+  color: #8fb2ff;
+}
+
 .inspector-pair label {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);

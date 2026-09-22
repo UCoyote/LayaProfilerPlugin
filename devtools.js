@@ -1,5 +1,5 @@
 chrome.devtools.panels.create(
-  "Laya Profiler",
+  "Game Profiler",
   "icons/icon-32.png",
   "panel.html",
   () => {}
