@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.2.0";
+    var profilerVersion = "0.2.2";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -915,6 +915,153 @@
       });
     }
 
+    function normalizeResourceUrl(url) {
+      if (!url || typeof url !== "string") return "";
+      var next = absoluteUrl(url).split("?")[0].split("#")[0];
+      if (/^(data:|blob:)/i.test(next)) return next.slice(0, 128);
+      return next.replace(/\/+$/, "");
+    }
+
+    function isImageFamilyType(type) {
+      return /ImageAsset|Texture2DArray|RenderTexture|TextureCube|Texture3D|Texture2D|BaseTexture|Texture|SpriteFrame|HTMLImageElement|HTMLCanvasElement|Bitmap/.test(String(type || ""));
+    }
+
+    function resourceTypeRank(type) {
+      var ranks = {
+        Texture2DArray: 100,
+        RenderTexture: 95,
+        TextureCube: 90,
+        Texture3D: 88,
+        Texture2D: 80,
+        BaseTexture: 75,
+        Texture: 70,
+        SpriteFrame: 55,
+        ImageAsset: 45,
+        HTMLImageElement: 40,
+        HTMLCanvasElement: 35
+      };
+      return ranks[type] || 0;
+    }
+
+    function betterResourceType(current, next) {
+      if (!current || current === "Array" || current === "Object" || current === "Unknown") return next || current;
+      if (resourceTypeRank(next) > resourceTypeRank(current)) return next;
+      return current;
+    }
+
+    function collectResourceIdentities(value, fallbackKey) {
+      var keys = [];
+      var seen = new WeakSet();
+      function push(key) {
+        if (!key || keys.indexOf(key) !== -1) return;
+        keys.push(String(key));
+      }
+      function pushUrl(url) {
+        var next = normalizeResourceUrl(url);
+        if (next) push("url:" + next);
+      }
+      function pushUuid(uuid, family) {
+        uuid = String(uuid || "");
+        if (!uuid) return;
+        push("uuid:" + uuid);
+        var base = uuid.split("@")[0];
+        if (family && base) push("uuid:" + base);
+      }
+      function visit(obj, depth) {
+        if (!obj || depth > 4) return;
+        if (typeof obj === "string") {
+          pushUrl(obj);
+          return;
+        }
+        if (typeof obj !== "object" || seen.has(obj)) return;
+        seen.add(obj);
+        var type = resourceTypeName(obj, "");
+        var family = isImageFamilyType(type);
+        try {
+          pushUrl(obj.nativeUrl || obj._nativeUrl || obj.url || obj._url || obj.src || obj._src || obj.currentSrc || obj.path || obj._path);
+        } catch (error) {}
+        try {
+          pushUuid(obj.uuid || obj._uuid, family);
+        } catch (error) {}
+        ["texture", "_texture", "image", "_image", "bitmap", "_bitmap", "source", "_source", "imageAsset", "_imageAsset"].forEach(function (field) {
+          try {
+            var inner = obj[field];
+            if (inner) visit(inner, depth + 1);
+          } catch (error) {}
+        });
+      }
+      visit(value, 0);
+      if (fallbackKey != null && fallbackKey !== "") push("key:" + fallbackKey);
+      return keys;
+    }
+
+    function mergeTwoResources(existing, item) {
+      if (resourceTypeRank(item.type) > resourceTypeRank(existing.type)) {
+        existing.name = item.name || existing.name;
+        existing.url = item.url || existing.url;
+        existing.id = item.id || existing.id;
+      }
+      existing.previewUrl = existing.previewUrl || item.previewUrl;
+      existing.bytes = Math.max(existing.bytes || 0, item.bytes || 0);
+      if (!existing.size || existing.size === "-") existing.size = item.size;
+      existing.type = betterResourceType(existing.type, item.type);
+      if (item.refCount != null && (existing.refCount == null || item.refCount > existing.refCount)) {
+        existing.refCount = item.refCount;
+        existing.refText = item.refText;
+      }
+      if (existing.source && item.source && String(existing.source).indexOf(item.source) === -1) {
+        existing.source += ", " + item.source;
+      } else if (!existing.source) {
+        existing.source = item.source;
+      }
+      existing.destroyed = existing.destroyed || item.destroyed;
+      return existing;
+    }
+
+    function mergeResourceList(items) {
+      var parent = [];
+      function find(index) {
+        while (parent[index] !== index) {
+          parent[index] = parent[parent[index]];
+          index = parent[index];
+        }
+        return index;
+      }
+      function union(left, right) {
+        left = find(left);
+        right = find(right);
+        if (left !== right) parent[right] = left;
+      }
+      items.forEach(function (item, index) {
+        parent[index] = index;
+      });
+      var keyIndex = {};
+      items.forEach(function (item, index) {
+        var keys = item.identities && item.identities.length
+          ? item.identities
+          : [item.identity || normalizeResourceUrl(item.url) || item.name || String(item.id)];
+        keys.forEach(function (key) {
+          if (!key) return;
+          if (keyIndex[key] == null) {
+            keyIndex[key] = index;
+          } else {
+            union(keyIndex[key], index);
+          }
+        });
+      });
+      var groups = {};
+      items.forEach(function (item, index) {
+        var root = find(index);
+        groups[root] = groups[root] ? mergeTwoResources(groups[root], item) : item;
+      });
+      return Object.keys(groups).map(function (key) {
+        var item = groups[key];
+        delete item.identities;
+        delete item.identity;
+        return item;
+      });
+    }
+
     function collectLayaResources(Laya) {
       var seen = new WeakSet();
       var resources = [];
@@ -946,40 +1093,8 @@
           refCount: refs,
           refText: refs === 0 ? "空闲" : refs == null ? "-" : String(refs),
           destroyed: value.destroyed === true,
+          identities: collectResourceIdentities(value, key),
           detail: compact(value, 1)
-        });
-      }
-
-      function betterType(current, next) {
-        if (!current || current === "Array" || current === "Object" || current === "Unknown") return next;
-        if (current === "Texture" && next === "Texture2D") return next;
-        return current;
-      }
-
-      function mergeResources(items) {
-        var byKey = {};
-        items.forEach(function (item) {
-          var key = absoluteUrl(item.url) || item.name || String(item.id);
-          var existing = byKey[key];
-          if (!existing) {
-            byKey[key] = item;
-            return;
-          }
-          existing.previewUrl = existing.previewUrl || item.previewUrl;
-          existing.bytes = Math.max(existing.bytes || 0, item.bytes || 0);
-          if (!existing.size || existing.size === "-") existing.size = item.size;
-          existing.type = betterType(existing.type, item.type);
-          if (existing.refCount == null && item.refCount != null) {
-            existing.refCount = item.refCount;
-            existing.refText = item.refText;
-          }
-          if (existing.source.indexOf(item.source) === -1) {
-            existing.source += ", " + item.source;
-          }
-          existing.destroyed = existing.destroyed || item.destroyed;
-        });
-        return Object.keys(byKey).map(function (key) {
-          return byKey[key];
         });
       }
 
@@ -989,7 +1104,7 @@
         });
       });
 
-      return mergeResources(resources).sort(function (a, b) {
+      return mergeResourceList(resources).sort(function (a, b) {
         return b.bytes - a.bytes;
       }).slice(0, 1000);
     }
@@ -1018,6 +1133,7 @@
           refCount: refs,
           refText: refs === 0 ? "空闲" : refs == null ? "-" : String(refs),
           destroyed: value.destroyed === true || value.isValid === false,
+          identities: collectResourceIdentities(value, key),
           detail: compact(value, 1)
         });
       }
@@ -1028,7 +1144,7 @@
         });
       }
 
-      return resources.sort(function (a, b) {
+      return mergeResourceList(resources).sort(function (a, b) {
         return b.bytes - a.bytes;
       }).slice(0, 1000);
     }
@@ -1201,11 +1317,52 @@
     }
 
     function gameConfigRoot() {
+      var source = gameConfigSource();
+      return source && source.root ? source.root : null;
+    }
+
+    function cocosTxtMap() {
       try {
-        return window.config && typeof window.config === "object" ? window.config : null;
+        var txtMgr = window.txtMgr;
+        if (txtMgr == null || (typeof txtMgr !== "object" && typeof txtMgr !== "function")) return null;
+        var map = txtMgr._txtMap;
+        if (map == null || typeof map !== "object") return null;
+        return map;
       } catch (error) {
         return null;
       }
+    }
+
+    function gameConfigSource() {
+      var engine = detectEngine();
+      if (engine && engine.type === "cocos") {
+        return {
+          mode: "txtMap",
+          rootName: "txtMgr._txtMap",
+          root: cocosTxtMap()
+        };
+      }
+      try {
+        return {
+          mode: "tbs",
+          rootName: "config",
+          root: window.config && typeof window.config === "object" ? window.config : null
+        };
+      } catch (error) {
+        return { mode: "tbs", rootName: "config", root: null };
+      }
+    }
+
+    function wrapConfigTable(table) {
+      if (table && typeof table === "object" && !Array.isArray(table) && table.data != null && typeof table.data === "object") {
+        return table;
+      }
+      return { data: table };
+    }
+
+    function configTableData(table) {
+      var wrapped = wrapConfigTable(table);
+      return wrapped && wrapped.data;
     }
 
     function configDataCount(data) {
@@ -1245,22 +1402,25 @@
     }
 
     function collectConfig() {
-      var root = gameConfigRoot();
+      var source = gameConfigSource();
+      var root = source.root;
       if (!root) {
         return {
           detected: false,
-          rootName: "config",
+          mode: source.mode,
+          rootName: source.rootName,
           tables: []
         };
       }
       var tables = [];
-      Object.keys(root).forEach(function (key) {
-        if (!/Tbs$/i.test(key)) return;
-        var table = null;
+      valuesFromCollection(root).forEach(function (entry) {
+        var key = String(entry.key);
+        if (source.mode === "tbs" && !/Tbs$/i.test(key)) return;
+        var table = entry.value;
+        if (typeof table === "function") return;
         var data = null;
         try {
-          table = root[key];
-          data = table && table.data;
+          data = configTableData(table);
         } catch (error) {}
         tables.push({
           name: key,
@@ -1271,16 +1431,23 @@
       });
       return {
         detected: true,
-        rootName: "config",
+        mode: source.mode,
+        rootName: source.rootName,
         tables: tables
       };
     }
 
     function getGameConfigTable(name) {
-      var root = gameConfigRoot();
-      if (!root || !name || !/Tbs$/i.test(String(name))) return null;
+      var source = gameConfigSource();
+      var root = source.root;
+      if (!root || !name) return null;
+      if (source.mode === "tbs" && !/Tbs$/i.test(String(name))) return null;
       try {
-        return root[name] || null;
+        var table = null;
+        if (root instanceof Map) table = root.get(name);
+        else table = root[name];
+        if (table == null) return null;
+        return wrapConfigTable(table);
       } catch (error) {
         return null;
       }

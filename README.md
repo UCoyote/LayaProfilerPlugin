@@ -2,7 +2,7 @@
 
 Game Profiler 是一个用于 LayaAir 和 Cocos Creator 3.8 Web 游戏的 Chrome DevTools 扩展。打开 DevTools 后会新增 `Game Profiler` 面板，用于查看运行时状态、节点层级、游戏配置、资源快照、GPU 内存归因、页面控制台日志和监控指标。
 
-- 插件版本：`0.2.0`
+- 插件版本：`0.2.2`
 - 作者：UCoyote
 - 邮箱：501202461@qq.com
 - 支持引擎：LayaAir、Cocos Creator 3.8
@@ -38,9 +38,8 @@ Game Profiler 是一个用于 LayaAir 和 Cocos Creator 3.8 Web 游戏的 Chrome
 
 ## 游戏配置
 
-- 自动检测全局 `window.config` 对象。
-- 遍历 `config` 对象中字段名以 `Tbs` 结尾的成员，作为游戏配置表展示。
-- 读取配置表对象的 `data` 字段，并展示所有配置数据。
+- LayaAir 自动检测全局 `window.config` 对象，遍历字段名以 `Tbs` 结尾的成员作为配置表，并读取表对象的 `data` 字段。
+- Cocos Creator 检测 `window.txtMgr` 是否存在，遍历 `window.txtMgr._txtMap` 中的成员作为配置表。
 - 配置表列表支持搜索。
 - 配置数据支持搜索字段、路径和值。
 - 配置数据使用虚拟列表渲染，减少数据量过大时的卡顿。
@@ -72,6 +71,7 @@ Game Profiler 是一个用于 LayaAir 和 Cocos Creator 3.8 Web 游戏的 Chrome
 - 比较模式显示资源变化类型，包括新增、移除和变更。
 - 资源表展示预览、对象名、来源、GPU 内存、资源类型、尺寸、引用计数。
 - LayaAir 资源来源包括 `Laya.Loader` 和 `Laya.Resource` 缓存；Cocos Creator 资源来源为 `cc.assetManager.assets`。
+- 同一张图对应的 `ImageAsset`、`Texture2D`、`SpriteFrame` 会按 URL / UUID 合并为一条，避免重复显示和 GPU 重复计算。
 - GPU 内存、资源类型、尺寸、引用计数和变化类型支持排序。
 - 图片资源支持缩略图和悬停大图预览。
 - 非图片资源会显示不可预览提示。

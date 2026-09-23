@@ -505,6 +505,11 @@
     return snapshot && snapshot.config && Array.isArray(snapshot.config.tables) ? snapshot.config.tables : [];
   }
 
+  function isCocosConfig(config) {
+    if (config && config.mode === "txtMap") return true;
+    return currentEngine() === "cocos";
+  }
+
   function configPathKey(path) {
     return JSON.stringify(path || []);
   }
@@ -643,15 +648,25 @@
     if (!config || !config.detected) {
       selectedConfigTable = null;
       selectedConfigData = null;
-      list.innerHTML = '<div class="empty">未检测到全局 config 对象</div>';
-      detail.innerHTML = '<div class="empty">页面存在 window.config 后会显示配置表。</div>';
+      if (isCocosConfig(config)) {
+        list.innerHTML = '<div class="empty">未检测到 window.txtMgr._txtMap</div>';
+        detail.innerHTML = '<div class="empty">页面存在 window.txtMgr 且 _txtMap 有数据后会显示配置表。</div>';
+      } else {
+        list.innerHTML = '<div class="empty">未检测到全局 config 对象</div>';
+        detail.innerHTML = '<div class="empty">页面存在 window.config 后会显示配置表。</div>';
+      }
       return;
     }
     if (!configTables().length) {
       selectedConfigTable = null;
       selectedConfigData = null;
-      list.innerHTML = '<div class="empty">未找到后缀为 Tbs 的配置表</div>';
-      detail.innerHTML = '<div class="empty">会遍历 window.config 中名称以 Tbs 结尾的成员。</div>';
+      if (isCocosConfig(config)) {
+        list.innerHTML = '<div class="empty">txtMgr._txtMap 中没有配置表</div>';
+        detail.innerHTML = '<div class="empty">会遍历 window.txtMgr._txtMap 中的配置表成员。</div>';
+      } else {
+        list.innerHTML = '<div class="empty">未找到后缀为 Tbs 的配置表</div>';
+        detail.innerHTML = '<div class="empty">会遍历 window.config 中名称以 Tbs 结尾的成员。</div>';
+      }
       return;
     }
     if (!selectedConfigTable || !configTables().some(function (table) { return table.name === selectedConfigTable; })) {
@@ -669,7 +684,7 @@
     }).join("") || '<div class="empty">没有匹配的配置表</div>';
 
     if (!selectedConfigData || selectedConfigData.table !== selectedConfigTable) {
-      detail.innerHTML = '<div class="empty">正在读取 ' + escapeHtml(selectedConfigTable) + '.data...</div>';
+      detail.innerHTML = '<div class="empty">正在读取 ' + escapeHtml(selectedConfigTable) + (isCocosConfig(config) ? "..." : ".data...") + '</div>';
       loadSelectedConfigData(selectedConfigTable);
       return;
     }
