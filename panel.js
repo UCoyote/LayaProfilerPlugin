@@ -34,6 +34,9 @@
   var tabLabels = {};
   var consoleLevelFilter = "all";
   var expandedConsoleStacks = {};
+  var nodeScrubState = null;
+  var pendingNodeScrub = null;
+  var nodePropertyWrite = 0;
 
   var mainTabsElement = document.getElementById("mainTabs");
   var mainContentElement = document.getElementById("mainContent");
@@ -103,6 +106,7 @@
 
   async function collectSnapshot() {
     if (paused) return;
+    if (nodeScrubState || isEditingNodeInspector()) return;
     var installed = await ensureInspector();
     if (!installed.ok) {
       setStatus("注入失败: " + installed.error, true);
@@ -286,6 +290,7 @@
   }
 
   function isEditingNodeInspector() {
+    if (nodeScrubState) return true;
     var active = document.activeElement;
     return active && $("nodeDetail") && $("nodeDetail").contains(active) && active.matches("input");
   }
@@ -449,9 +454,17 @@
     '</div>';
   }
 
+  function inspectorScrubInput(property, value, extra) {
+    return '<span class="inspector-scrub">' +
+      '<input data-node-property="' + escapeHtml(property) + '" type="number" value="' + escapeHtml(value) + '"' + (extra ? " " + extra : "") + ' title="拖动调整数值，点击后可输入">' +
+    '</span>';
+  }
+
   function inspectorField(label, property, value, type) {
-    var inputType = type === "text" ? "text" : "number";
-    return '<label class="inspector-field"><span>' + escapeHtml(label) + '</span><input data-node-property="' + escapeHtml(property) + '" type="' + inputType + '" value="' + escapeHtml(value) + '"></label>';
+    var control = type === "text"
+      ? '<input data-node-property="' + escapeHtml(property) + '" type="text" value="' + escapeHtml(value) + '">'
+      : inspectorScrubInput(property, value);
+    return '<label class="inspector-field"><span>' + escapeHtml(label) + '</span>' + control + '</label>';
   }
 
   function inspectorReadOnlyField(label, value) {
@@ -460,16 +473,16 @@
 
   function inspectorPair(label, aLabel, aProperty, aValue, bLabel, bProperty, bValue) {
     return '<div class="inspector-pair"><span>' + escapeHtml(label) + '</span>' +
-      '<label><em>' + escapeHtml(aLabel) + '</em><input data-node-property="' + escapeHtml(aProperty) + '" type="number" value="' + escapeHtml(aValue) + '"></label>' +
-      '<label><em>' + escapeHtml(bLabel) + '</em><input data-node-property="' + escapeHtml(bProperty) + '" type="number" value="' + escapeHtml(bValue) + '"></label>' +
+      '<label><em>' + escapeHtml(aLabel) + '</em>' + inspectorScrubInput(aProperty, aValue) + '</label>' +
+      '<label><em>' + escapeHtml(bLabel) + '</em>' + inspectorScrubInput(bProperty, bValue) + '</label>' +
       '</div>';
   }
 
   function inspectorTriple(label, aLabel, aProperty, aValue, bLabel, bProperty, bValue, cLabel, cProperty, cValue) {
     return '<div class="inspector-pair inspector-triple"><span>' + escapeHtml(label) + '</span>' +
-      '<label><em>' + escapeHtml(aLabel) + '</em><input data-node-property="' + escapeHtml(aProperty) + '" type="number" value="' + escapeHtml(aValue) + '"></label>' +
-      '<label><em>' + escapeHtml(bLabel) + '</em><input data-node-property="' + escapeHtml(bProperty) + '" type="number" value="' + escapeHtml(bValue) + '"></label>' +
-      '<label><em>' + escapeHtml(cLabel) + '</em><input data-node-property="' + escapeHtml(cProperty) + '" type="number" value="' + escapeHtml(cValue) + '"></label>' +
+      '<label><em>' + escapeHtml(aLabel) + '</em>' + inspectorScrubInput(aProperty, aValue) + '</label>' +
+      '<label><em>' + escapeHtml(bLabel) + '</em>' + inspectorScrubInput(bProperty, bValue) + '</label>' +
+      '<label><em>' + escapeHtml(cLabel) + '</em>' + inspectorScrubInput(cProperty, cValue) + '</label>' +
       '</div>';
   }
 
@@ -486,7 +499,7 @@
 
   function inspectorRange(label, property, value) {
     var percent = Math.max(0, Math.min(100, Number(value) * 100 || 0));
-    return '<div class="inspector-range"><span>' + escapeHtml(label) + '</span><input data-node-property="' + escapeHtml(property) + '" type="range" min="0" max="1" step="0.01" value="' + escapeHtml(value) + '"><input data-node-property="' + escapeHtml(property) + '" type="number" min="0" max="1" step="0.01" value="' + escapeHtml(value) + '"></div>';
+    return '<div class="inspector-range"><span>' + escapeHtml(label) + '</span><input data-node-property="' + escapeHtml(property) + '" type="range" min="0" max="1" step="0.01" value="' + escapeHtml(value) + '">' + inspectorScrubInput(property, value, 'min="0" max="1" step="0.01"') + '</div>';
   }
 
   function renderKeyValues(targetId, data) {
@@ -1937,16 +1950,150 @@
     renderNodes();
   }
 
-  async function setSelectedNodeProperty(property, value) {
+  function evalInPageLive(expression) {
+    chrome.devtools.inspectedWindow.eval(expression, { useContentScriptContext: false }, function () {});
+  }
+
+  function coerceNodePropertyValue(property, value) {
+    if (property === "name") return String(value == null ? "" : value);
+    if (property === "active" || property === "visible" || property === "mouseEnabled" || property === "mouseThrough") {
+      return value === true || value === "true" || value === 1 || value === "1";
+    }
+    var numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : value;
+  }
+
+  function writeLocalNodeProperty(property, value) {
+    var node = selectedNodePath && nodeIndex[selectedNodePath];
+    if (!node) return;
+    node[property] = coerceNodePropertyValue(property, value);
+  }
+
+  function setSelectedNodeProperty(property, value, options) {
+    options = options || {};
     if (!selectedNodePath || !property) return;
-    await evalInPage("window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
+    var nextValue = coerceNodePropertyValue(property, value);
+    writeLocalNodeProperty(property, nextValue);
+    var expression = "window.__LayaProfiler && window.__LayaProfiler.command(" + JSON.stringify({
       type: "setNodeProperty",
       path: selectedNodePath,
       property: property,
-      value: value
-    }) + ")");
-    await collectSnapshot();
-    renderNodes();
+      value: nextValue
+    }) + ")";
+    if (options.silent) {
+      evalInPageLive(expression);
+      return;
+    }
+    nodePropertyWrite += 1;
+    var writeId = nodePropertyWrite;
+    return evalInPage(expression).then(function () {
+      if (writeId !== nodePropertyWrite) return;
+      return collectSnapshot();
+    }).then(function () {
+      if (writeId !== nodePropertyWrite) return;
+      renderNodes();
+    });
+  }
+
+  function nodePropertyStep(property, input) {
+    if (input && input.step && input.step !== "any") {
+      var step = Number(input.step);
+      if (Number.isFinite(step) && step > 0) return step;
+    }
+    if (property === "alpha") return 0.01;
+    if (/^scale|pivot|skew/.test(property)) return 0.01;
+    return 1;
+  }
+
+  function nodePropertyDecimals(step) {
+    var text = String(step);
+    var index = text.indexOf(".");
+    return index === -1 ? 0 : text.length - index - 1;
+  }
+
+  function clampNodePropertyValue(property, value, input) {
+    if (property === "alpha") return Math.max(0, Math.min(1, value));
+    if (input) {
+      if (input.min !== "" && Number.isFinite(Number(input.min))) value = Math.max(Number(input.min), value);
+      if (input.max !== "" && Number.isFinite(Number(input.max))) value = Math.min(Number(input.max), value);
+    }
+    return value;
+  }
+
+  function formatNodePropertyValue(value, step) {
+    return Number(value).toFixed(nodePropertyDecimals(step));
+  }
+
+  function syncNodePropertyInputs(property, value) {
+    $("nodeDetail").querySelectorAll('input[data-node-property="' + property + '"]').forEach(function (input) {
+      if (input === document.activeElement) return;
+      input.value = value;
+    });
+  }
+
+  function applyScrubValue(state, clientX, modifiers) {
+    var speed = 1;
+    if (modifiers.shiftKey) speed = 0.1;
+    if (modifiers.altKey || modifiers.ctrlKey) speed = 10;
+    var next = state.startValue + (clientX - state.startX) * state.step * speed;
+    next = clampNodePropertyValue(state.property, next, state.input);
+    next = Number(next.toFixed(nodePropertyDecimals(state.step)));
+    var text = formatNodePropertyValue(next, state.step);
+    state.input.value = text;
+    syncNodePropertyInputs(state.property, text);
+    setSelectedNodeProperty(state.property, next, { silent: true });
+  }
+
+  function stopNodeScrub(event) {
+    pendingNodeScrub = null;
+    window.removeEventListener("pointermove", onNodeScrubMove);
+    window.removeEventListener("pointerup", stopNodeScrub);
+    window.removeEventListener("pointercancel", stopNodeScrub);
+    if (!nodeScrubState) return;
+    if (event && nodeScrubState.input && nodeScrubState.input.releasePointerCapture) {
+      try {
+        nodeScrubState.input.releasePointerCapture(event.pointerId);
+      } catch (error) {}
+    }
+    if (nodeScrubState.wrap) nodeScrubState.wrap.classList.remove("is-scrubbing");
+    document.body.classList.remove("node-scrubbing");
+    nodeScrubState = null;
+  }
+
+  function onNodeScrubMove(event) {
+    if (pendingNodeScrub && !nodeScrubState) {
+      if (Math.abs(event.clientX - pendingNodeScrub.startX) < 3) return;
+      event.preventDefault();
+      startNodeScrub(pendingNodeScrub.input, event, pendingNodeScrub);
+      pendingNodeScrub = null;
+      return;
+    }
+    if (!nodeScrubState) return;
+    event.preventDefault();
+    applyScrubValue(nodeScrubState, event.clientX, event);
+  }
+
+  function startNodeScrub(input, event, origin) {
+    var property = input.dataset.nodeProperty;
+    var startValue = origin && Number.isFinite(origin.startValue) ? origin.startValue : Number(input.value);
+    if (!Number.isFinite(startValue)) startValue = 0;
+    nodeScrubState = {
+      input: input,
+      wrap: input.closest(".inspector-scrub"),
+      property: property,
+      startX: origin ? origin.startX : event.clientX,
+      startValue: startValue,
+      step: nodePropertyStep(property, input)
+    };
+    if (nodeScrubState.wrap) nodeScrubState.wrap.classList.add("is-scrubbing");
+    document.body.classList.add("node-scrubbing");
+    try {
+      if (input.setPointerCapture) input.setPointerCapture(event.pointerId);
+    } catch (error) {}
+    window.addEventListener("pointermove", onNodeScrubMove);
+    window.addEventListener("pointerup", stopNodeScrub);
+    window.addEventListener("pointercancel", stopNodeScrub);
+    applyScrubValue(nodeScrubState, event.clientX, event);
   }
 
   async function outputSelectedNodeToConsole() {
@@ -1993,18 +2140,33 @@
     }) + ")");
   }
 
+  $("nodeDetail").addEventListener("pointerdown", function (event) {
+    var input = event.target.closest(".inspector-scrub input[type='number'][data-node-property]");
+    if (!input || input.readOnly || event.button !== 0) return;
+    if (document.activeElement === input) return;
+    pendingNodeScrub = {
+      input: input,
+      startX: event.clientX,
+      startValue: Number(input.value) || 0
+    };
+    window.addEventListener("pointermove", onNodeScrubMove);
+    window.addEventListener("pointerup", stopNodeScrub);
+    window.addEventListener("pointercancel", stopNodeScrub);
+  });
+
   $("nodeDetail").addEventListener("change", function (event) {
     var input = event.target.closest("[data-node-property]");
     if (!input || input.dataset.nodeBoolean) return;
-    setSelectedNodeProperty(input.dataset.nodeProperty, input.value);
+    setSelectedNodeProperty(input.dataset.nodeProperty, input.value, { silent: true });
   });
 
   $("nodeDetail").addEventListener("input", function (event) {
-    var input = event.target.closest('input[type="range"][data-node-property]');
-    if (!input) return;
-    var paired = $("nodeDetail").querySelector('input[type="number"][data-node-property="' + input.dataset.nodeProperty + '"]');
-    if (paired) paired.value = input.value;
-    setSelectedNodeProperty(input.dataset.nodeProperty, input.value);
+    var input = event.target.closest("input[data-node-property]");
+    if (!input || input.dataset.nodeBoolean) return;
+    if (input.type === "range") {
+      syncNodePropertyInputs(input.dataset.nodeProperty, input.value);
+    }
+    setSelectedNodeProperty(input.dataset.nodeProperty, input.value, { silent: true });
   });
 
   $("nodeDetail").addEventListener("keydown", function (event) {
@@ -2022,7 +2184,12 @@
     }
     var button = event.target.closest("button[data-node-property][data-node-boolean]");
     if (!button) return;
-    setSelectedNodeProperty(button.dataset.nodeProperty, button.dataset.nodeBoolean !== "true");
+    var property = button.dataset.nodeProperty;
+    var nextValue = button.dataset.nodeBoolean !== "true";
+    var node = selectedNodePath && nodeIndex[selectedNodePath];
+    if (node) node[property] = nextValue;
+    renderNodes();
+    setSelectedNodeProperty(property, nextValue, { silent: true });
   });
 
   $("nodeSearchInput").addEventListener("input", renderNodes);

@@ -1,6 +1,6 @@
 (function () {
   function installLayaProfiler() {
-    var profilerVersion = "0.2.2";
+    var profilerVersion = "0.2.4";
     if (window.__LayaProfiler && window.__LayaProfiler.version === profilerVersion) {
       return { ok: true, reused: true };
     }
@@ -1636,7 +1636,29 @@
       return candidates[0] || null;
     }
 
+    function findCocosCanvasCamera(cc, node) {
+      var current = node;
+      var guard = 0;
+      while (current && guard < 80) {
+        var canvasComp = getCocosComponent(current, cc, ["Canvas"]);
+        if (canvasComp && canvasComp.cameraComponent) return canvasComp.cameraComponent;
+        current = nodeParent(current);
+        guard += 1;
+      }
+      try {
+        if (node && typeof node.getComponentInParent === "function") {
+          var Canvas = getCocosClass(cc, ["Canvas"]);
+          var found = Canvas ? node.getComponentInParent(Canvas) : node.getComponentInParent("cc.Canvas");
+          if (found && found.cameraComponent) return found.cameraComponent;
+        }
+      } catch (error) {}
+      return null;
+    }
+
     function findCocosCamera(cc, node) {
+      var canvasCamera = findCocosCanvasCamera(cc, node);
+      if (canvasCamera) return canvasCamera;
+
       var cameras = [];
       try {
         var root = cc && cc.director && cc.director.root;
@@ -1656,45 +1678,157 @@
           });
         }
       } catch (error) {}
-      var layer = node && node.layer;
-      for (var index = 0; index < cameras.length; index += 1) {
-        var camera = cameras[index];
-        var visibility = camera.visibility != null ? camera.visibility : camera._visibility;
-        var cameraNode = camera.node;
-        var active = !cameraNode || cameraNode.activeInHierarchy !== false;
-        if (!active) continue;
-        if (layer == null || visibility == null || (visibility & layer)) return camera;
+
+      function cameraVisible(camera) {
+        var cameraNode = camera && camera.node;
+        return !cameraNode || cameraNode.activeInHierarchy !== false;
       }
-      return cameras[0] || null;
+
+      function cameraSeesLayer(camera, layer) {
+        if (layer == null) return true;
+        var visibility = camera.visibility != null ? camera.visibility : camera._visibility;
+        if (visibility == null) return true;
+        return !!(visibility & layer);
+      }
+
+      function isOrthoCamera(camera) {
+        try {
+          var projection = camera.projection;
+          var ortho = cc && cc.Camera && cc.Camera.ProjectionType && cc.Camera.ProjectionType.ORTHO;
+          if (ortho != null) return projection === ortho;
+          return projection === 0;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      var layer = node && node.layer;
+      var visible = cameras.filter(function (camera) {
+        return cameraVisible(camera) && cameraSeesLayer(camera, layer);
+      });
+      for (var index = 0; index < visible.length; index += 1) {
+        if (isOrthoCamera(visible[index])) return visible[index];
+      }
+      return visible[0] || cameras[0] || null;
+    }
+
+    function getCocosScreenSize(camera, canvas, rect) {
+      var width = 0;
+      var height = 0;
+      try {
+        var inner = camera && (camera.camera || camera._camera);
+        if (inner) {
+          width = safeNumber(inner.width, 0);
+          height = safeNumber(inner.height, 0);
+        }
+      } catch (error) {}
+      if (!width || !height) {
+        width = safeNumber(camera && camera.width, 0);
+        height = safeNumber(camera && camera.height, 0);
+      }
+      if (!width || !height) {
+        width = canvas && canvas.width ? canvas.width : rect.width;
+        height = canvas && canvas.height ? canvas.height : rect.height;
+      }
+      return { width: Math.max(1, width), height: Math.max(1, height) };
+    }
+
+    function createCocosVec3(cc, x, y, z) {
+      try {
+        if (cc && cc.Vec3) return new cc.Vec3(x, y, z || 0);
+      } catch (error) {}
+      try {
+        if (cc && cc.math && cc.math.Vec3) return new cc.math.Vec3(x, y, z || 0);
+      } catch (error) {}
+      return { x: x, y: y, z: z || 0 };
+    }
+
+    function callCocosWorldToScreen(camera, worldX, worldY, worldZ, cc) {
+      var world = createCocosVec3(cc, worldX, worldY, worldZ);
+      var out = createCocosVec3(cc, 0, 0, 0);
+      try {
+        if (camera && typeof camera.worldToScreen === "function") {
+          var result = camera.worldToScreen(world, out);
+          if (result && Number.isFinite(Number(result.x)) && Number.isFinite(Number(result.y))) return result;
+        }
+      } catch (error) {}
+      if (Number.isFinite(Number(out.x)) && Number.isFinite(Number(out.y)) && (out.x || out.y)) return out;
+      return world;
     }
 
     function cocosWorldToClient(worldX, worldY, worldZ, cc, camera, canvas, rect) {
-      var screenX = worldX;
-      var screenY = worldY;
+      var screen = callCocosWorldToScreen(camera, worldX, worldY, worldZ, cc);
+      var size = getCocosScreenSize(camera, canvas, rect);
+      var nx = safeNumber(screen.x, 0) / size.width;
+      var ny = 1 - safeNumber(screen.y, 0) / size.height;
+      return {
+        x: rect.left + nx * rect.width,
+        y: rect.top + ny * rect.height
+      };
+    }
+
+    function convertCocosLocalToWorld(node, ui, localX, localY, cc) {
+      var local = createCocosVec3(cc, localX, localY, 0);
       try {
-        if (camera && typeof camera.worldToScreen === "function") {
-          var vec = cc && cc.Vec3 ? new cc.Vec3(worldX, worldY, worldZ || 0) : { x: worldX, y: worldY, z: worldZ || 0 };
-          var out = camera.worldToScreen(vec);
-          if (out) {
-            screenX = safeNumber(out.x, worldX);
-            screenY = safeNumber(out.y, worldY);
+        if (ui && typeof ui.convertToWorldSpaceAR === "function") {
+          var converted = ui.convertToWorldSpaceAR(local);
+          if (converted && Number.isFinite(Number(converted.x)) && Number.isFinite(Number(converted.y))) {
+            return {
+              x: safeNumber(converted.x, localX),
+              y: safeNumber(converted.y, localY),
+              z: safeNumber(converted.z, 0)
+            };
           }
         }
       } catch (error) {}
-      var dpr = window.devicePixelRatio || 1;
       try {
-        if (cc && cc.view && typeof cc.view.getDevicePixelRatio === "function") {
-          dpr = cc.view.getDevicePixelRatio() || dpr;
+        if (node && typeof node.getWorldMatrix === "function" && cc && cc.Vec3 && typeof cc.Vec3.transformMat4 === "function") {
+          var out = createCocosVec3(cc, 0, 0, 0);
+          cc.Vec3.transformMat4(out, local, node.getWorldMatrix());
+          return { x: safeNumber(out.x, localX), y: safeNumber(out.y, localY), z: safeNumber(out.z, 0) };
         }
       } catch (error) {}
-      var canvasWidth = canvas && canvas.width ? canvas.width : rect.width;
-      var canvasHeight = canvas && canvas.height ? canvas.height : rect.height;
-      var cssWidth = canvasWidth / Math.max(dpr, 0.01);
-      var cssHeight = canvasHeight / Math.max(dpr, 0.01);
-      return {
-        x: rect.left + (screenX / Math.max(dpr, 0.01)) * (rect.width / Math.max(cssWidth, 1)),
-        y: rect.top + ((canvasHeight - screenY) / Math.max(dpr, 0.01)) * (rect.height / Math.max(cssHeight, 1))
-      };
+      var pos = node && (node.worldPosition || node.position) || { x: 0, y: 0, z: 0 };
+      return { x: safeNumber(pos.x, 0) + localX, y: safeNumber(pos.y, 0) + localY, z: safeNumber(pos.z, 0) };
+    }
+
+    function getCocosNodeWorldCorners(node, cc) {
+      var ui = getCocosComponent(node, cc, ["UITransform"]);
+      if (ui) {
+        var width = safeNumber(ui.width, 0);
+        var height = safeNumber(ui.height, 0);
+        if (!width || !height) {
+          try {
+            var content = ui.contentSize;
+            width = width || safeNumber(content && content.width, 0);
+            height = height || safeNumber(content && content.height, 0);
+          } catch (error) {}
+        }
+        if (width && height) {
+          var anchorX = safeNumber(ui.anchorX, 0.5);
+          var anchorY = safeNumber(ui.anchorY, 0.5);
+          return [
+            convertCocosLocalToWorld(node, ui, -width * anchorX, -height * anchorY, cc),
+            convertCocosLocalToWorld(node, ui, width * (1 - anchorX), -height * anchorY, cc),
+            convertCocosLocalToWorld(node, ui, width * (1 - anchorX), height * (1 - anchorY), cc),
+            convertCocosLocalToWorld(node, ui, -width * anchorX, height * (1 - anchorY), cc)
+          ];
+        }
+      }
+      var pos = node.worldPosition;
+      try {
+        if (!pos && typeof node.getWorldPosition === "function") pos = node.getWorldPosition();
+      } catch (error) {}
+      if (!pos) pos = node.position || { x: 0, y: 0, z: 0 };
+      var px = safeNumber(pos.x, 0);
+      var py = safeNumber(pos.y, 0);
+      var pz = safeNumber(pos.z, 0);
+      return [
+        { x: px - 20, y: py - 20, z: pz },
+        { x: px + 20, y: py - 20, z: pz },
+        { x: px + 20, y: py + 20, z: pz },
+        { x: px - 20, y: py + 20, z: pz }
+      ];
     }
 
     function nodeCocosGlobalBounds(node, cc) {
@@ -1702,43 +1836,9 @@
       var canvas = findCocosCanvas(cc);
       var rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: innerWidth, height: innerHeight };
       var camera = findCocosCamera(cc, node);
-      var corners = [];
-      var ui = getCocosComponent(node, cc, ["UITransform"]);
-      try {
-        if (ui && typeof ui.getBoundingBoxToWorld === "function") {
-          var box = ui.getBoundingBoxToWorld();
-          var x = safeNumber(box.x, 0);
-          var y = safeNumber(box.y, 0);
-          var width = safeNumber(box.width, 0);
-          var height = safeNumber(box.height, 0);
-          if (width && height) {
-            corners = [
-              [x, y, 0],
-              [x + width, y, 0],
-              [x + width, y + height, 0],
-              [x, y + height, 0]
-            ];
-          }
-        }
-      } catch (error) {}
-      if (!corners.length) {
-        var pos = node.worldPosition;
-        try {
-          if (!pos && typeof node.getWorldPosition === "function") pos = node.getWorldPosition();
-        } catch (error) {}
-        if (!pos) pos = node.position || { x: 0, y: 0, z: 0 };
-        var px = safeNumber(pos.x, 0);
-        var py = safeNumber(pos.y, 0);
-        var pz = safeNumber(pos.z, 0);
-        corners = [
-          [px - 20, py - 20, pz],
-          [px + 20, py - 20, pz],
-          [px + 20, py + 20, pz],
-          [px - 20, py + 20, pz]
-        ];
-      }
+      var corners = getCocosNodeWorldCorners(node, cc);
       var points = corners.map(function (corner) {
-        return cocosWorldToClient(corner[0], corner[1], corner[2], cc, camera, canvas, rect);
+        return cocosWorldToClient(corner.x, corner.y, corner.z, cc, camera, canvas, rect);
       });
       var left = Math.min(points[0].x, points[1].x, points[2].x, points[3].x);
       var right = Math.max(points[0].x, points[1].x, points[2].x, points[3].x);
@@ -2236,7 +2336,32 @@
       } else {
         return { ok: false, message: "不可编辑属性: " + property };
       }
+      flushNodeVisual(node, { type: "cocos", cc: cc });
       return { ok: true, message: property + " = " + value };
+    }
+
+    function flushNodeVisual(node, engine) {
+      if (!node) return;
+      try {
+        var bits = engine && engine.cc && engine.cc.Node && engine.cc.Node.TransformBit;
+        if (bits && typeof node.invalidateChildren === "function") {
+          node.invalidateChildren(bits.TRS || bits.POSITION || 7);
+        }
+      } catch (error) {}
+      try {
+        if (typeof node.updateWorldTransform === "function") node.updateWorldTransform();
+      } catch (error) {}
+      try {
+        if (typeof node._updateWorldMatrix === "function") node._updateWorldMatrix();
+      } catch (error) {}
+      try {
+        if (typeof node.repaint === "function") node.repaint();
+      } catch (error) {}
+      try {
+        if (engine && engine.Laya && engine.Laya.stage && typeof engine.Laya.stage.repaint === "function") {
+          engine.Laya.stage.repaint();
+        }
+      } catch (error) {}
     }
 
     function command(name) {
@@ -2381,9 +2506,11 @@
           if (!node) return { ok: false, message: "未找到节点: " + name.path };
           if (engine.type === "cocos") {
             node.active = !!name.visible;
+            flushNodeVisual(node, engine);
             return { ok: true, message: (node.name || typeName(node)) + " active = " + node.active };
           }
           node.visible = !!name.visible;
+          flushNodeVisual(node, engine);
           return { ok: true, message: (node.name || typeName(node)) + " visible = " + node.visible };
         }
         if (name && name.type === "outputNodeToConsole") {
@@ -2429,9 +2556,13 @@
           if (editable[property] === "number") nextValue = safeNumber(nextValue, targetNode[property] || 0);
           if (editable[property] === "boolean") nextValue = !!nextValue;
           if (editable[property] === "string") nextValue = String(nextValue == null ? "" : nextValue);
-          if (engine.type === "cocos") return setCocosNodeProperty(targetNode, property, nextValue, cc);
+          if (engine.type === "cocos") {
+            var cocosResult = setCocosNodeProperty(targetNode, property, nextValue, cc);
+            return cocosResult;
+          }
           targetNode[property] = nextValue;
           if (property === "name" && targetNode.$owner) targetNode.$owner.name = nextValue;
+          flushNodeVisual(targetNode, engine);
           return { ok: true, message: property + " = " + nextValue };
         }
         return { ok: false, message: "未知命令: " + name };

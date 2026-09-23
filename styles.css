@@ -521,12 +521,40 @@ body.tab-dragging .bottom-dock {
 .inspector-pair input,
 .inspector-range input {
   min-width: 0;
+  width: 100%;
   height: 30px;
   border: 1px solid #0b6595;
   border-radius: 6px;
   background: #101923;
   color: #dce9f4;
   text-align: center;
+}
+
+.inspector-scrub {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.inspector-scrub input[type="number"] {
+  cursor: ew-resize;
+}
+
+.inspector-scrub input[type="number"]:focus {
+  cursor: text;
+}
+
+.inspector-scrub input[type="number"]::-webkit-outer-spin-button,
+.inspector-scrub input[type="number"]::-webkit-inner-spin-button {
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.node-scrubbing,
+body.node-scrubbing * {
+  cursor: ew-resize !important;
+  user-select: none !important;
 }
 
 .inspector-field:not(.readonly) input:focus,

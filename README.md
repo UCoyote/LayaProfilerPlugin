@@ -2,7 +2,7 @@
 
 Game Profiler 是一个用于 LayaAir 和 Cocos Creator 3.8 Web 游戏的 Chrome DevTools 扩展。打开 DevTools 后会新增 `Game Profiler` 面板，用于查看运行时状态、节点层级、游戏配置、资源快照、GPU 内存归因、页面控制台日志和监控指标。
 
-- 插件版本：`0.2.2`
+- 插件版本：`0.2.4`
 - 作者：UCoyote
 - 邮箱：501202461@qq.com
 - 支持引擎：LayaAir、Cocos Creator 3.8
@@ -34,6 +34,8 @@ Game Profiler 是一个用于 LayaAir 和 Cocos Creator 3.8 Web 游戏的 Chrome
 - 支持选中节点后在舞台上显示红色框选标记。LayaAir 会计算父节点变换后的舞台坐标；Cocos Creator 会通过 `UITransform.getBoundingBoxToWorld()` 和摄像机 `worldToScreen` 映射到页面坐标。
 - LayaAir 支持快捷修改：名称、激活、可见、位置、尺寸、锚点、缩放、倾斜、旋转、透明度、鼠标触摸、`zOrder`。
 - Cocos Creator 支持快捷修改：名称、激活、位置 XYZ、缩放 XYZ、欧拉角、2D 角度、UI 尺寸、锚点、透明度、Layer、SiblingIndex。
+- 修改节点属性会实时写回游戏并立即生效。
+- 数字输入框悬停时显示左右拖动光标，按住左键向左拖减小、向右拖增大；点击后可直接输入。Shift 微调，Ctrl/Alt 加速。
 - 支持将当前选中节点输出到 Chrome Console，输出的是真实节点对象，可在控制台展开对象并修改字段。
 
 ## 游戏配置
